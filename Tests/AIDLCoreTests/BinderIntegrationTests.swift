@@ -3,6 +3,70 @@ import Binder
 import Foundation
 import Testing
 
+@Test func generatedInoutArraysUpdateOnlyAfterValidReply() async throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try """
+        package demo;
+        interface IInout {
+            int update(inout int[] values, inout byte[] bytes);
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedInout.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+
+    var values: [Int32] = [7, 2]
+    var bytes: [UInt8] = [0, 255]
+    let proxy = IInoutProxy(remote: InoutService())
+    #expect(try await proxy.update(&values, &bytes) == 42)
+    #expect(values == [2, 7])
+    #expect(bytes == [255, 0])
+
+    let malformed = IInoutProxy(remote: InvalidInoutReply())
+    await #expect(throws: BinderError.failedTransaction) {
+        try await malformed.update(&values, &bytes)
+    }
+    #expect(values == [2, 7])
+    #expect(bytes == [255, 0])
+
+    let resizing = IInoutProxy(remote: InoutService(resizes: true))
+    await #expect(throws: BinderError.failedTransaction) {
+        try await resizing.update(&values, &bytes)
+    }
+    #expect(values == [2, 7])
+    #expect(bytes == [255, 0])
+}
+
+private final class InoutService: IInoutStub, @unchecked Sendable {
+    let resizes: Bool
+
+    init(resizes: Bool = false) {
+        self.resizes = resizes
+        super.init()
+    }
+
+    override func update(_ values: inout [Int32], _ bytes: inout [UInt8]) async throws -> Int32 {
+        if resizes { values.append(0) }
+        values.reverse()
+        bytes.reverse()
+        return 42
+    }
+}
+
+private final class InvalidInoutReply: IBinder {
+    func transact(code: UInt32, data: Parcel, flags: TransactionFlags) async throws -> Parcel {
+        var reply = Parcel()
+        reply.writeNoException()
+        reply.append(Int32(42))
+        reply.append(Int32(2))
+        reply.append(Int32(10))
+        reply.append(Int32(20))
+        reply.append(bytes: [0])
+        return reply
+    }
+}
+
 @Test func roundTripsGeneratedAIDLMethodsThroughBinder() async throws {
     let source = """
         package demo;
