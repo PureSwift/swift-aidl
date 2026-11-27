@@ -56,6 +56,51 @@ private final class StringMapService: IStringMapStub, @unchecked Sendable {
     override func echoOptional(_ values: [String: String]?) async throws -> [String: String]? { values }
 }
 
+@Test func generatedTypedMapsUseParcelablePresenceMarkers() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let package = root.appendingPathComponent("demo", isDirectory: true)
+    try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let path = package.appendingPathComponent("ITypedMap.aidl")
+    try """
+        package demo;
+        import demo.Chunk;
+        interface ITypedMap {
+            Map<String, Chunk> echo(in Map<String, Chunk> values);
+            @nullable Map<String, Chunk> echoOptional(in @nullable Map<String, Chunk> values);
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    try "package demo; parcelable Chunk { int id; long count; boolean complete; }"
+        .write(to: package.appendingPathComponent("Chunk.aidl"), atomically: true, encoding: .utf8)
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedTypedMap.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path, includePaths: [root.path]) == String(contentsOf: fixture, encoding: .utf8))
+
+    let stub = TypedMapService()
+    let proxy = ITypedMapProxy(remote: stub)
+    let chunks = try await proxy.echo(["x": Chunk(id: 7, count: .min, complete: true)])
+    #expect(chunks["x"]?.id == 7)
+    #expect(chunks["x"]?.count == Int64.min)
+    #expect(chunks["x"]?.complete == true)
+    #expect(try await proxy.echoOptional([:])?.isEmpty == true)
+    #expect(try await proxy.echoOptional(nil) == nil)
+
+    var request = Parcel()
+    request.appendInterfaceToken(ITypedMapProxy.descriptor)
+    request.append(Int32(1))
+    request.append("x")
+    request.append(Int32(0))
+    await #expect(throws: BinderError.failedTransaction) {
+        try await stub.transact(code: ITypedMapTransactionCode.echo, data: request, flags: [])
+    }
+}
+
+private final class TypedMapService: ITypedMapStub, @unchecked Sendable {
+    override func echo(_ values: [String: Chunk]) async throws -> [String: Chunk] { values }
+
+    override func echoOptional(_ values: [String: Chunk]?) async throws -> [String: Chunk]? { values }
+}
+
 @Test func generatedInoutArraysUpdateOnlyAfterValidReply() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     let package = root.appendingPathComponent("demo", isDirectory: true)
