@@ -29,7 +29,12 @@ public struct `Chunk`: BinderParcelable {
     }
 
     public static func readTypedObject(from reader: inout Parcel.Reader) throws -> Self {
-        guard try reader.readInt32() != 0 else { throw BinderError.failedTransaction }
+        guard let value = try readNullableTypedObject(from: &reader) else { throw BinderError.failedTransaction }
+        return value
+    }
+
+    public static func readNullableTypedObject(from reader: inout Parcel.Reader) throws -> Self? {
+        guard try reader.readInt32() != 0 else { return nil }
         return try Self(from: &reader)
     }
 
