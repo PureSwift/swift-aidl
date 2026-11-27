@@ -7,6 +7,8 @@ public protocol `IEcho`: BinderInterface {
     func `scale`(_ argument0: Float, _ argument1: Double) async throws -> Double
     func `matches`(_ argument0: Int8, _ argument1: UInt16) async throws -> Bool
     func `roundTrip`(_ argument0: `Chunk`) async throws -> `Chunk`
+    func `echoText`(_ argument0: String) async throws -> String
+    func `echoOptionalText`(_ argument0: String?) async throws -> String?
 }
 
 public extension `IEcho` {
@@ -19,6 +21,8 @@ public enum IEchoTransactionCode {
     public static let `scale`: UInt32 = 3
     public static let `matches`: UInt32 = 4
     public static let `roundTrip`: UInt32 = 5
+    public static let `echoText`: UInt32 = 6
+    public static let `echoOptionalText`: UInt32 = 7
 }
 
 public struct IEchoProxy: `IEcho`, BinderProxy {
@@ -76,6 +80,27 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         try reader.readException()
         return try `Chunk`.readTypedObject(from: &reader)
     }
+
+    public func `echoText`(_ argument0: String) async throws -> String {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        request.append(argument0)
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoText`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try reader.readString() else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
+    public func `echoOptionalText`(_ argument0: String?) async throws -> String? {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        if let value = argument0 { request.append(value) } else { request.appendNullString() }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoOptionalText`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try reader.readString()
+    }
 }
 
 open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
@@ -103,6 +128,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `roundTrip`(_ argument0: `Chunk`) async throws -> `Chunk` {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`roundTrip`)
+    }
+
+    open func `echoText`(_ argument0: String) async throws -> String {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoText`)
+    }
+
+    open func `echoOptionalText`(_ argument0: String?) async throws -> String? {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoOptionalText`)
     }
 
     public override func onTransact(
@@ -148,6 +181,22 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`roundTrip`(argument0)
             reply.writeNoException()
             try result.writeTypedObject(to: &reply)
+            return true
+        case IEchoTransactionCode.`echoText`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try data.readString() else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoText`(argument0)
+            reply.writeNoException()
+            reply.append(result)
+            return true
+        case IEchoTransactionCode.`echoOptionalText`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try data.readString()
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoOptionalText`(argument0)
+            reply.writeNoException()
+            if let value = result { reply.append(value) } else { reply.appendNullString() }
             return true
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)
