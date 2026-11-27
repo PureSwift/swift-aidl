@@ -9,6 +9,8 @@ import Testing
     "interface Example { int[] first(); }",
     "interface Example { void first(out int value); }",
     "oneway interface Example { int first(); }",
+    "interface Example { @nullable int first(); }",
+    "interface Example { @nullable void first(); }",
 ])
 func rejectsUnsupportedSwiftGeneration(_ source: String) throws {
     let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
