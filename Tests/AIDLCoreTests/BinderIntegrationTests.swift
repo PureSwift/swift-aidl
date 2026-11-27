@@ -13,6 +13,8 @@ import Testing
             double scale(float factor, double value);
             boolean matches(byte value, char marker);
             Chunk roundTrip(in Chunk sample);
+            String echoText(String value);
+            @nullable String echoOptionalText(in @nullable String value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -57,6 +59,31 @@ import Testing
     #expect(result.id == 2)
     #expect(result.count == Int64.min)
     #expect(result.complete)
+
+    #expect(try await proxy.echoText("A😀") == "A😀")
+    #expect(try await proxy.echoOptionalText("") == "")
+    #expect(try await proxy.echoOptionalText(nil) == nil)
+
+    var invalidRequest = Parcel()
+    invalidRequest.appendInterfaceToken(IEchoProxy.descriptor)
+    invalidRequest.appendNullString()
+    await #expect(throws: ParcelError.invalidLength(-1)) {
+        try await stub.transact(code: IEchoTransactionCode.echoText, data: invalidRequest, flags: [])
+    }
+
+    let invalidReplyProxy = IEchoProxy(remote: NullStringEndpoint())
+    await #expect(throws: ParcelError.invalidLength(-1)) {
+        try await invalidReplyProxy.echoText("value")
+    }
+}
+
+private final class NullStringEndpoint: IBinder {
+    func transact(code: UInt32, data: Parcel, flags: TransactionFlags) async throws -> Parcel {
+        var reply = Parcel()
+        reply.writeNoException()
+        reply.appendNullString()
+        return reply
+    }
 }
 
 @Test func generatedParcelableRespectsFrameBounds() throws {
@@ -129,4 +156,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func roundTrip(_ sample: Chunk) async throws -> Chunk {
         Chunk(id: sample.id + 1, count: sample.count, complete: sample.complete)
     }
+
+    override func echoText(_ value: String) async throws -> String { value }
+
+    override func echoOptionalText(_ value: String?) async throws -> String? { value }
 }
