@@ -381,20 +381,21 @@ struct AIDLSwiftGenerator {
             throw failure("Swift generation requires a plain structured parcelable for '\(name)'")
         }
         let fields = try fields(parcelable.fields, in: name) { field, context in
-            let type = field.type
-            let nullable = isNullableAnnotation(type.annotations)
-            let wire: ParcelableField
-            if let reference = referenceType(type), nullable || type.annotations.isEmpty {
-                wire = .reference(reference, nullable: nullable)
-            } else {
-                wire = .scalar(try scalar(type, context: context))
-            }
+            let wire = try inlineField(field.type, context: context)
             let initialValue = try field.defaultValue.map { tokens in
                 try parcelableDefault(tokens, for: wire, fieldName: field.name, context: context)
             } ?? wire.initialValue
             return (wire, initialValue)
         }
         return fields.map { ($0.name, $0.field.0, $0.field.1) }
+    }
+
+    private func inlineField(_ type: AIDLType, context: String) throws -> ParcelableField {
+        let nullable = isNullableAnnotation(type.annotations)
+        if let reference = referenceType(type), nullable || type.annotations.isEmpty {
+            return .reference(reference, nullable: nullable)
+        }
+        return .scalar(try scalar(type, context: context))
     }
 
     private func parcelableDefault(
@@ -422,7 +423,7 @@ struct AIDLSwiftGenerator {
         throw failure("unsupported explicit default for \(context)")
     }
 
-    private func unionFields(_ union: AIDLUnion) throws -> [(name: String, field: Scalar)] {
+    private func unionFields(_ union: AIDLUnion) throws -> [(name: String, field: WireType)] {
         guard union.annotations.isEmpty, union.constants.isEmpty, union.nestedDeclarations.isEmpty, !union.fields.isEmpty else {
             throw failure("Swift generation requires a plain union with at least one field for '\(union.name)'")
         }
@@ -430,7 +431,7 @@ struct AIDLSwiftGenerator {
             guard field.defaultValue == nil else {
                 throw failure("Swift generation does not support an explicit default for \(context)")
             }
-            return try scalar(field.type, context: context)
+            return try inlineField(field.type, context: context).wireType
         }
     }
 
@@ -460,10 +461,13 @@ struct AIDLSwiftGenerator {
             "        switch try reader.readInt32() {",
         ]
         for (tag, field) in fields.enumerated() {
-            lines += [
-                "        case \(tag):",
-                "            self = try .\(field.name)(\(field.field.read(from: "reader")))",
-            ]
+            lines.append("        case \(tag):")
+            if field.field.requiresNonNullRead {
+                lines.append("            \(field.field.decode(from: "reader", binding: "value"))")
+                lines.append("            self = .\(field.name)(value)")
+            } else {
+                lines.append("            self = try .\(field.name)(\(field.field.read(from: "reader")))")
+            }
         }
         lines += [
             "        default:",
@@ -478,7 +482,7 @@ struct AIDLSwiftGenerator {
             lines += [
                 "        case let .\(field.name)(value):",
                 "            parcel.append(Int32(\(tag)))",
-                "            parcel.\(field.field.append("value"))",
+                "            \(field.field.write("value", to: "parcel"))",
             ]
         }
         lines += ["        }", "    }"]
