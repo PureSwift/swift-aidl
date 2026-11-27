@@ -137,7 +137,7 @@ struct AIDLSwiftGenerator {
                 "        try reader.readException()",
             ]
             if let result = method.result {
-                if result.isRequiredString {
+                if result.requiresNonNullRead {
                     lines.append("        \(result.decode(from: "reader", binding: "result"))")
                     lines.append("        return result")
                 } else {
@@ -177,7 +177,7 @@ struct AIDLSwiftGenerator {
         // The parser preserves annotations before the return type on the method.
         let returnAnnotations = method.annotations + method.returnType.annotations
         guard method.annotations.isEmpty ||
-              (method.returnType.name == "String" && isNullableAnnotation(returnAnnotations)) else {
+              (referenceType(method.returnType) != nil && isNullableAnnotation(returnAnnotations)) else {
             throw failure("Swift generation does not support annotations on \(context)")
         }
         // AOSP reserves the top 100 method IDs for compiler metadata.
@@ -205,10 +205,10 @@ struct AIDLSwiftGenerator {
     }
 
     private func wireType(_ type: AIDLType, leadingAnnotations: [AIDLAnnotation] = [], context: String) throws -> WireType {
-        if type.name == "String", type.arrayDimensions == 0, type.typeArguments.isEmpty {
+        if let reference = referenceType(type) {
             let annotations = leadingAnnotations + type.annotations
-            if annotations.isEmpty { return .string(nullable: false) }
-            if isNullableAnnotation(annotations) { return .string(nullable: true) }
+            if annotations.isEmpty { return .reference(reference, nullable: false) }
+            if isNullableAnnotation(annotations) { return .reference(reference, nullable: true) }
         }
         if isPlain(type) {
             if let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
@@ -226,6 +226,15 @@ struct AIDLSwiftGenerator {
             }
         }
         throw failure("unsupported Swift wire type '\(type.name)' in \(context)")
+    }
+
+    private func referenceType(_ type: AIDLType) -> Reference? {
+        guard type.typeArguments.isEmpty else { return nil }
+        switch (type.name, type.arrayDimensions) {
+        case ("String", 0): return .string
+        case ("byte", 1): return .bytes
+        default: return nil
+        }
     }
 
     private func isNullableAnnotation(_ annotations: [AIDLAnnotation]) -> Bool {
@@ -320,7 +329,7 @@ struct AIDLSwiftGenerator {
             "onTransact", "transact", "interfaceDescriptor", "remote", "Parcel",
             "BinderProxy", "BinderStub", "BinderInterface", "IBinder", "TransactionFlags",
             "BinderTransactionError", "BinderError", "Int8", "Int32", "Int64", "UInt16", "UInt32",
-            "UInt64", "Bool", "Float", "Double", "String", "Array", "BinderParcelable", "ParcelError",
+            "UInt8", "UInt64", "Bool", "Float", "Double", "String", "Array", "BinderParcelable", "ParcelError",
         ]
         guard !reserved.contains(value), value.utf8.allSatisfy({
             (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 95
@@ -350,18 +359,18 @@ struct AIDLSwiftGenerator {
 
     private enum WireType {
         case scalar(Scalar)
-        case string(nullable: Bool)
+        case reference(Reference, nullable: Bool)
         case parcelable(String, qualifiedName: String)
 
-        var isRequiredString: Bool {
-            if case .string(nullable: false) = self { return true }
+        var requiresNonNullRead: Bool {
+            if case .reference(_, nullable: false) = self { return true }
             return false
         }
 
         var swiftType: String {
             switch self {
             case let .scalar(type): type.swiftType
-            case let .string(nullable): nullable ? "String?" : "String"
+            case let .reference(type, nullable): type.swiftType + (nullable ? "?" : "")
             case let .parcelable(name, _): escaped(name)
             }
         }
@@ -369,14 +378,14 @@ struct AIDLSwiftGenerator {
         func read(from reader: String) -> String {
             switch self {
             case let .scalar(type): type.read(from: reader)
-            case .string: "\(reader).readString()"
+            case let .reference(type, _): "\(reader).\(type.readMethod)()"
             case let .parcelable(name, _): "\(escaped(name)).readTypedObject(from: &\(reader))"
             }
         }
 
         func decode(from reader: String, binding: String) -> String {
             let read = read(from: reader)
-            if isRequiredString {
+            if requiresNonNullRead {
                 return "guard let \(binding) = try \(read) else { throw ParcelError.invalidLength(-1) }"
             }
             return "let \(binding) = try \(read)"
@@ -385,11 +394,23 @@ struct AIDLSwiftGenerator {
         func write(_ value: String, to parcel: String) -> String {
             switch self {
             case let .scalar(type): "\(parcel).\(type.append(value))"
-            case .string(nullable: false): "\(parcel).append(\(value))"
-            case .string(nullable: true):
-                "if let value = \(value) { \(parcel).append(value) } else { \(parcel).appendNullString() }"
+            case let .reference(type, nullable: false): "\(parcel).\(type.append(value))"
+            case let .reference(type, nullable: true):
+                "if let value = \(value) { \(parcel).\(type.append("value")) } else { \(parcel).\(type.appendNullMethod)() }"
             case .parcelable: "try \(value).writeTypedObject(to: &\(parcel))"
             }
+        }
+    }
+
+    private enum Reference {
+        case string, bytes
+
+        var swiftType: String { self == .string ? "String" : "[UInt8]" }
+        var readMethod: String { self == .string ? "readString" : "readBytes" }
+        var appendNullMethod: String { self == .string ? "appendNullString" : "appendNullBytes" }
+
+        func append(_ value: String) -> String {
+            self == .string ? "append(\(value))" : "append(bytes: \(value))"
         }
     }
 
