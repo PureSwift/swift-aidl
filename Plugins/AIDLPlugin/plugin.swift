@@ -7,6 +7,12 @@ struct AIDLPlugin: BuildToolPlugin {
         let sources: [String]
         let includePaths: [String]?
         let preprocessedPaths: [String]?
+        let interfaceMetadata: [String: InterfaceMetadata]?
+    }
+
+    private struct InterfaceMetadata: Decodable {
+        let version: Int32?
+        let hash: String?
     }
 
     func createBuildCommands(context: PluginContext, target: Target) throws -> [Command] {
@@ -15,13 +21,17 @@ struct AIDLPlugin: BuildToolPlugin {
         let configFile = directory.appendingPathComponent("aidl-config.json")
         guard FileManager.default.fileExists(atPath: configFile.path) else { return [] }
         let config = try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: configFile))
+        let metadata = config.interfaceMetadata ?? [:]
+        if let unknownSource = metadata.keys.sorted().first(where: { !config.sources.contains($0) }) {
+            throw PluginError("Interface metadata names an unconfigured source: \(unknownSource)")
+        }
         let sources = config.sources.map { resolve($0, relativeTo: directory) }
         let includes = (config.includePaths ?? []).map { resolve($0, relativeTo: directory) }
         let preprocessed = (config.preprocessedPaths ?? []).map { resolve($0, relativeTo: directory) }
         let tool = try context.tool(named: "aidl-swift")
         let imported = try includes.flatMap(aidlFiles(in:))
         var outputs = Set<String>()
-        return try sources.map { source in
+        return try zip(config.sources, sources).map { path, source in
             guard source.pathExtension == "aidl",
                   FileManager.default.isReadableFile(atPath: source.path) else {
                 throw PluginError("Cannot read AIDL source at \(source.path)")
@@ -34,6 +44,8 @@ struct AIDLPlugin: BuildToolPlugin {
             var arguments = ["generate", "-o", output.path]
             arguments += includes.flatMap { ["-I", $0.path] }
             arguments += preprocessed.flatMap { ["-p", $0.path] }
+            if let version = metadata[path]?.version { arguments += ["--interface-version", String(version)] }
+            if let hash = metadata[path]?.hash { arguments.append("--interface-hash=\(hash)") }
             arguments.append(source.path)
             let inputs = Set([configFile, source] + imported + preprocessed)
             return .buildCommand(
