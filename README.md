@@ -48,7 +48,8 @@ Their `byte`, `int`, or `long` backing determines the wire encoding, and unknown
 raw values can round-trip through generated methods. Generate imported enums
 separately alongside their interfaces.
 
-AIDL unions with scalar fields generate Swift enums with associated values.
+AIDL unions with scalar, string, or byte-array fields generate Swift enums with
+associated values. String and byte-array variants can be nullable.
 The wire tag follows declaration order and only the active value is encoded.
 Generate imported unions separately alongside their interfaces.
 
