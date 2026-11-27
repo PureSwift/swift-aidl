@@ -58,3 +58,25 @@ import AIDLCore
     var parser = try AIDLParser(source: "interface Broken { void call(")
     #expect(throws: AIDLParserError.self) { try parser.parse() }
 }
+
+@Test func parsesQualifiedImportsAndOpaqueParcelableMetadata() throws {
+    var parser = try AIDLParser(source: """
+        package example;
+        import android.os.ParcelFileDescriptor;
+        parcelable Container.Entry<T, U> cpp_header "entry.h" ndk_header "ndk/entry.h" rust_type "example::Entry";
+        """)
+    let file = try parser.parse()
+    #expect(file.imports == [["android", "os", "ParcelFileDescriptor"]])
+    guard case let .parcelable(parcelable) = try #require(file.declarations.first) else {
+        Issue.record("Expected parcelable")
+        return
+    }
+    #expect(parcelable.name == "Container.Entry")
+    #expect(parcelable.isOpaqueForwardDecl)
+    #expect(parcelable.typeParameters == ["T", "U"])
+    #expect(parcelable.backendNames.mapValues(\.text) == [
+        "cpp_header": #""entry.h""#,
+        "ndk_header": #""ndk/entry.h""#,
+        "rust_type": #""example::Entry""#,
+    ])
+}
