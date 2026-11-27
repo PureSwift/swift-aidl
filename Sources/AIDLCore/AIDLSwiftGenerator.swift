@@ -336,8 +336,8 @@ struct AIDLSwiftGenerator {
             if annotations.isEmpty || nullable { return .reference(reference, nullable: nullable) }
         }
         if type.arrayDimensions == 1, type.typeArguments.isEmpty, annotations.isEmpty || nullable,
-           let scalar = Scalar(rawValue: type.name), scalar == .int || scalar == .long {
-            return .integralArray(scalar, codec: file.declarations[0].name + "ArrayCodec", nullable: nullable)
+           let scalar = Scalar(rawValue: type.name), scalar != .byte {
+            return .scalarArray(scalar, codec: file.declarations[0].name + "ArrayCodec", nullable: nullable)
         }
         if type.arrayDimensions == 0, type.typeArguments.isEmpty, annotations.isEmpty || nullable {
             if annotations.isEmpty, let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
@@ -657,7 +657,7 @@ struct AIDLSwiftGenerator {
     private enum WireType {
         case scalar(Scalar)
         case reference(Reference, nullable: Bool)
-        case integralArray(Scalar, codec: String, nullable: Bool)
+        case scalarArray(Scalar, codec: String, nullable: Bool)
         case parcelable(String, qualifiedName: String, nullable: Bool)
         case enumeration(String, qualifiedName: String, backing: Scalar)
 
@@ -671,13 +671,13 @@ struct AIDLSwiftGenerator {
 
         var requiresNonNullRead: Bool {
             switch self {
-            case .reference(_, nullable: false), .integralArray(_, _, nullable: false): true
+            case .reference(_, nullable: false), .scalarArray(_, _, nullable: false): true
             default: false
             }
         }
 
         var usesArrayCodec: Bool {
-            if case .integralArray = self { return true }
+            if case .scalarArray = self { return true }
             return false
         }
 
@@ -685,7 +685,7 @@ struct AIDLSwiftGenerator {
             switch self {
             case let .scalar(type): type.swiftType
             case let .reference(type, nullable): type.swiftType + (nullable ? "?" : "")
-            case let .integralArray(type, _, nullable): "[\(type.swiftType)]" + (nullable ? "?" : "")
+            case let .scalarArray(type, _, nullable): "[\(type.swiftType)]" + (nullable ? "?" : "")
             case let .parcelable(name, _, nullable): escaped(name) + (nullable ? "?" : "")
             case let .enumeration(name, _, _): escaped(name)
             }
@@ -695,7 +695,7 @@ struct AIDLSwiftGenerator {
             switch self {
             case let .scalar(type): type.read(from: reader)
             case let .reference(type, _): "\(reader).\(type.readMethod)()"
-            case let .integralArray(type, codec, _):
+            case let .scalarArray(type, codec, _):
                 "\(codec).read(from: &\(reader), elementSize: \(type.wireSize), readElement: { try \(type.read(from: "$0")) })"
             case let .parcelable(name, _, nullable):
                 "\(escaped(name)).\(nullable ? "readNullableTypedObject" : "readTypedObject")(from: &\(reader))"
@@ -718,7 +718,7 @@ struct AIDLSwiftGenerator {
             case let .reference(type, nullable: false): "\(parcel).\(type.append(value))"
             case let .reference(type, nullable: true):
                 "if let value = \(value) { \(parcel).\(type.append("value")) } else { \(parcel).\(type.appendNullMethod)() }"
-            case let .integralArray(type, codec, _):
+            case let .scalarArray(type, codec, _):
                 "try \(codec).write(\(value), to: &\(parcel)) { $1.\(type.append("$0")) }"
             case .parcelable(_, _, nullable: false): "try \(value).writeTypedObject(to: &\(parcel))"
             case .parcelable(_, _, nullable: true):
