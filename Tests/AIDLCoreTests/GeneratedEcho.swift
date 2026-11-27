@@ -16,6 +16,10 @@ public protocol `IEcho`: BinderInterface {
     func `echoChoice`(_ argument0: `Choice`) async throws -> `Choice`
     func `echoInts`(_ argument0: [Int32]) async throws -> [Int32]
     func `echoLongs`(_ argument0: [Int64]?) async throws -> [Int64]?
+    func `echoBools`(_ argument0: [Bool]) async throws -> [Bool]
+    func `echoChars`(_ argument0: [UInt16]) async throws -> [UInt16]
+    func `echoFloats`(_ argument0: [Float]) async throws -> [Float]
+    func `echoDoubles`(_ argument0: [Double]?) async throws -> [Double]?
     func `getInterfaceVersion`() async throws -> Int32
     func `getInterfaceHash`() async throws -> String
 }
@@ -44,6 +48,10 @@ public enum IEchoTransactionCode {
     public static let `echoChoice`: UInt32 = 12
     public static let `echoInts`: UInt32 = 13
     public static let `echoLongs`: UInt32 = 14
+    public static let `echoBools`: UInt32 = 15
+    public static let `echoChars`: UInt32 = 16
+    public static let `echoFloats`: UInt32 = 17
+    public static let `echoDoubles`: UInt32 = 18
     public static let `getInterfaceVersion`: UInt32 = 16777215
     public static let `getInterfaceHash`: UInt32 = 16777214
 }
@@ -213,6 +221,49 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         return try IEchoArrayCodec.read(from: &reader, elementSize: 8, readElement: { try $0.readInt64() })
     }
 
+    public func `echoBools`(_ argument0: [Bool]) async throws -> [Bool] {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { $1.append($0) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoBools`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readBool() }) else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
+    public func `echoChars`(_ argument0: [UInt16]) async throws -> [UInt16] {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { $1.append(character: $0) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoChars`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readCharacter() }) else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
+    public func `echoFloats`(_ argument0: [Float]) async throws -> [Float] {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { $1.append(Int32(bitPattern: $0.bitPattern)) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoFloats`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: { try Float(bitPattern: UInt32(bitPattern: $0.readInt32())) }) else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
+    public func `echoDoubles`(_ argument0: [Double]?) async throws -> [Double]? {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { $1.append(Int64(bitPattern: $0.bitPattern)) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoDoubles`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try IEchoArrayCodec.read(from: &reader, elementSize: 8, readElement: { try Double(bitPattern: UInt64(bitPattern: $0.readInt64())) })
+    }
+
     public func `getInterfaceVersion`() async throws -> Int32 {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
@@ -294,6 +345,22 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoLongs`(_ argument0: [Int64]?) async throws -> [Int64]? {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoLongs`)
+    }
+
+    open func `echoBools`(_ argument0: [Bool]) async throws -> [Bool] {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoBools`)
+    }
+
+    open func `echoChars`(_ argument0: [UInt16]) async throws -> [UInt16] {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoChars`)
+    }
+
+    open func `echoFloats`(_ argument0: [Float]) async throws -> [Float] {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoFloats`)
+    }
+
+    open func `echoDoubles`(_ argument0: [Double]?) async throws -> [Double]? {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoDoubles`)
     }
 
     open func `getInterfaceVersion`() async throws -> Int32 {
@@ -419,6 +486,38 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`echoLongs`(argument0)
             reply.writeNoException()
             try IEchoArrayCodec.write(result, to: &reply) { $1.append($0) }
+            return true
+        case IEchoTransactionCode.`echoBools`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: { try $0.readBool() }) else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoBools`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { $1.append($0) }
+            return true
+        case IEchoTransactionCode.`echoChars`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: { try $0.readCharacter() }) else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoChars`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { $1.append(character: $0) }
+            return true
+        case IEchoTransactionCode.`echoFloats`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: { try Float(bitPattern: UInt32(bitPattern: $0.readInt32())) }) else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoFloats`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { $1.append(Int32(bitPattern: $0.bitPattern)) }
+            return true
+        case IEchoTransactionCode.`echoDoubles`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 8, readElement: { try Double(bitPattern: UInt64(bitPattern: $0.readInt64())) })
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoDoubles`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { $1.append(Int64(bitPattern: $0.bitPattern)) }
             return true
         case IEchoTransactionCode.`getInterfaceVersion`:
             try data.enforceInterface(Self.descriptor)
