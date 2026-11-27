@@ -37,7 +37,7 @@ final class AIDLIntegerConstantAnalysis {
             case let .parcelable(value): constants = value.constants
             case let .union(value): constants = value.constants
             case let .enumeration(value):
-                let width = try backingWidth(value)
+                let width = try value.integerBacking().width
                 var predecessor: String?
                 for member in value.cases {
                     let name = owner + "." + member.name
@@ -50,7 +50,7 @@ final class AIDLIntegerConstantAnalysis {
             }
 
             for constant in constants where constant.type.arrayDimensions == 0 {
-                guard let width = width(of: constant.type.name) else { continue }
+                guard let width = AIDLIntegerBacking(rawValue: constant.type.name)?.width else { continue }
                 try add(owner + "." + constant.name, definition: Definition(
                     file: file, scope: scope, width: width, expression: constant.value, predecessor: nil
                 ))
@@ -111,30 +111,35 @@ final class AIDLIntegerConstantAnalysis {
         return nil
     }
 
-    private func backingWidth(_ type: AIDLEnum) throws -> Int {
-        guard let backing = type.annotations.first(where: { $0.name == "Backing" }) else { return 8 }
+    private func failure(_ message: String, for definition: Definition) -> AIDLConstantEvaluationError {
+        AIDLConstantEvaluationError(message: message, location: definition.expression?.first?.location)
+    }
+}
+
+enum AIDLIntegerBacking: String {
+    case byte, int, long
+
+    var width: Int {
+        switch self {
+        case .byte: 8
+        case .int: 32
+        case .long: 64
+        }
+    }
+}
+
+extension AIDLEnum {
+    func integerBacking() throws -> AIDLIntegerBacking {
+        guard let backing = annotations.first(where: { $0.name == "Backing" }) else { return .byte }
         let arguments = backing.arguments
         guard arguments.count == 3, arguments[0].text == "type", arguments[1].text == "=",
               arguments[2].kind == .stringLiteral,
-              let width = width(of: String(arguments[2].text.dropFirst().dropLast())) else {
+              let type = AIDLIntegerBacking(rawValue: String(arguments[2].text.dropFirst().dropLast())) else {
             throw AIDLConstantEvaluationError(
-                message: "expected byte, int or long backing type for enum '\(type.name)'",
+                message: "expected byte, int or long backing type for enum '\(name)'",
                 location: arguments.first?.location
             )
         }
-        return width
-    }
-
-    private func width(of type: String) -> Int? {
-        switch type {
-        case "byte": 8
-        case "int": 32
-        case "long": 64
-        default: nil
-        }
-    }
-
-    private func failure(_ message: String, for definition: Definition) -> AIDLConstantEvaluationError {
-        AIDLConstantEvaluationError(message: message, location: definition.expression?.first?.location)
+        return type
     }
 }

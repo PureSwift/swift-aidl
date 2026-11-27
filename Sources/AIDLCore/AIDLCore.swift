@@ -1,8 +1,3 @@
-/// Errors produced by functionality that has not yet been implemented.
-public enum AIDLCoreError: Error, Sendable {
-    case notImplemented
-}
-
 public struct AIDLParcelableLayoutError: Error, Sendable, CustomStringConvertible {
     public let missingTypes: [String]
 
@@ -34,8 +29,19 @@ public struct AIDLCompiler: Sendable {
         return graph
     }
 
-    /// Compiles an AIDL source file using the given ordered include paths.
-    public func compile(sourcePath: String, includePaths: [String] = []) throws {
-        throw AIDLCoreError.notImplemented
+    /// Emits Swift bindings for the root interface, structured parcelable, enum, or union.
+    public func compile(
+        sourcePath: String,
+        includePaths: [String] = [],
+        preprocessedPaths: [String] = [],
+        interfaceVersion: Int32? = nil,
+        interfaceHash: String? = nil,
+        manualParcelables: Set<String> = []
+    ) throws -> String {
+        let graph = try analyze(sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths)
+        return try AIDLSwiftGenerator(
+            file: graph.files[0], resolver: AIDLTypeResolver(graph: graph), integerConstants: graph.integerConstants,
+            interfaceVersion: interfaceVersion, interfaceHash: interfaceHash, manualParcelables: manualParcelables
+        ).generate()
     }
 }

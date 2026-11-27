@@ -7,11 +7,51 @@ struct AIDLSwift: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "aidl-swift",
         abstract: "Tools for working with AIDL source files.",
-        subcommands: [Check.self, Parse.self]
+        subcommands: [Check.self, Parse.self, Generate.self]
     )
 }
 
 extension AIDLSwift {
+    struct Generate: ParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Generate Swift Binder bindings for an AIDL interface, structured parcelable, enum, or union."
+        )
+
+        @Option(name: .customShort("I"), help: "Search this directory for imports, in the order specified.")
+        var includePaths: [String] = []
+
+        @Option(name: .customShort("p"), help: "Read type declarations from a preprocessed AIDL file.")
+        var preprocessedPaths: [String] = []
+
+        @Option(name: .shortAndLong, help: "Write the Swift source to this file. Defaults to standard output.")
+        var output: String?
+
+        @Option(help: "Emit the Stable AIDL interface-version transaction with this positive version.")
+        var interfaceVersion: Int32?
+
+        @Option(help: "Emit the Stable AIDL interface-hash transaction with this hash.")
+        var interfaceHash: String?
+
+        @Option(name: .customLong("manual-parcelable"), help: "Use a hand-written BinderParcelable for this fully qualified AIDL type.")
+        var manualParcelables: [String] = []
+
+        @Argument(help: "The root AIDL source file.")
+        var sourcePath: String
+
+        func run() throws {
+            let source = try AIDLCompiler().compile(
+                sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths,
+                interfaceVersion: interfaceVersion, interfaceHash: interfaceHash,
+                manualParcelables: Set(manualParcelables)
+            )
+            if let output {
+                try source.write(toFile: output, atomically: true, encoding: .utf8)
+            } else {
+                print(source, terminator: "")
+            }
+        }
+    }
+
     struct Parse: ParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Parse AIDL source files independently."
