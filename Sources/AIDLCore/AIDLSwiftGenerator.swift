@@ -353,10 +353,17 @@ struct AIDLSwiftGenerator {
                 return .stringCollection(codec: codec, nullable: nullable)
             }
             if let name = try? resolver.resolveName(elementName, in: file, scope: [file.declarations[0].name]),
-               let declaration = resolver.symbols[name]?.declaration,
-               try validateTypedObject(declaration) {
-                let swiftName = try swiftDeclarationName(declaration, qualifiedName: name, context: context)
-                return .parcelableCollection(swiftName, qualifiedName: name, codec: codec, nullable: nullable)
+               let declaration = resolver.symbols[name]?.declaration {
+                if try validateTypedObject(declaration) {
+                    let swiftName = try swiftDeclarationName(declaration, qualifiedName: name, context: context)
+                    return .parcelableCollection(swiftName, qualifiedName: name, codec: codec, nullable: nullable)
+                }
+                if case let .enumeration(enumeration) = declaration, type.arrayDimensions == 1 {
+                    let swiftName = try swiftDeclarationName(declaration, qualifiedName: name, context: context)
+                    return .enumArray(
+                        swiftName, qualifiedName: name, backing: try enumBacking(enumeration), codec: codec, nullable: nullable
+                    )
+                }
             }
         }
         if type.arrayDimensions == 1, type.typeArguments.isEmpty, annotations.isEmpty || nullable,
@@ -703,13 +710,14 @@ struct AIDLSwiftGenerator {
         case scalarArray(Scalar, codec: String, nullable: Bool)
         case stringCollection(codec: String, nullable: Bool)
         case parcelableCollection(String, qualifiedName: String, codec: String, nullable: Bool)
+        case enumArray(String, qualifiedName: String, backing: Scalar, codec: String, nullable: Bool)
         case parcelable(String, qualifiedName: String, nullable: Bool)
         case enumeration(String, qualifiedName: String, backing: Scalar)
 
         var declarationIdentity: (String, String)? {
             switch self {
             case let .parcelable(name, qualifiedName, _), let .enumeration(name, qualifiedName, _),
-                 let .parcelableCollection(name, qualifiedName, _, _):
+                 let .parcelableCollection(name, qualifiedName, _, _), let .enumArray(name, qualifiedName, _, _, _):
                 (name, qualifiedName)
             default: nil
             }
@@ -718,7 +726,8 @@ struct AIDLSwiftGenerator {
         var requiresNonNullRead: Bool {
             switch self {
             case .reference(_, nullable: false), .scalarArray(_, _, nullable: false),
-                 .stringCollection(_, nullable: false), .parcelableCollection(_, _, _, nullable: false): true
+                 .stringCollection(_, nullable: false), .parcelableCollection(_, _, _, nullable: false),
+                 .enumArray(_, _, _, _, nullable: false): true
             default: false
             }
         }
@@ -726,6 +735,7 @@ struct AIDLSwiftGenerator {
         var usesArrayCodec: Bool {
             switch self {
             case .scalarArray, .stringCollection, .parcelableCollection: true
+            case let .enumArray(_, _, backing, _, _): backing != .byte
             default: false
             }
         }
@@ -738,6 +748,8 @@ struct AIDLSwiftGenerator {
             case let .stringCollection(_, nullable): nullable ? "[String?]?" : "[String]"
             case let .parcelableCollection(name, _, _, nullable):
                 "[" + escaped(name) + (nullable ? "?]?" : "]")
+            case let .enumArray(name, _, _, _, nullable):
+                "[" + escaped(name) + (nullable ? "]?" : "]")
             case let .parcelable(name, _, nullable): escaped(name) + (nullable ? "?" : "")
             case let .enumeration(name, _, _): escaped(name)
             }
@@ -753,6 +765,10 @@ struct AIDLSwiftGenerator {
                 "\(codec).read(from: &\(reader), elementSize: 4, readElement: \(nullable ? "{ try $0.readString() }" : codec + ".readRequiredString"))"
             case let .parcelableCollection(name, _, codec, nullable):
                 "\(codec).read(from: &\(reader), elementSize: 4, readElement: \(escaped(name)).\(nullable ? "readNullableTypedObject" : "readTypedObject"))"
+            case let .enumArray(name, _, .byte, _, _):
+                "\(reader).readBytes()?.map({ \(escaped(name))(rawValue: Int8(bitPattern: $0)) })"
+            case let .enumArray(name, _, backing, codec, _):
+                "\(codec).read(from: &\(reader), elementSize: \(backing.wireSize), readElement: { try \(escaped(name))(rawValue: \(backing.read(from: "$0"))) })"
             case let .parcelable(name, _, nullable):
                 "\(escaped(name)).\(nullable ? "readNullableTypedObject" : "readTypedObject")(from: &\(reader))"
             case let .enumeration(name, _, backing):
@@ -784,6 +800,12 @@ struct AIDLSwiftGenerator {
                 "try \(codec).write(\(value), to: &\(parcel)) { try $0.writeTypedObject(to: &$1) }"
             case let .parcelableCollection(_, _, codec, nullable: true):
                 "try \(codec).write(\(value), to: &\(parcel)) { if let value = $0 { try value.writeTypedObject(to: &$1) } else { $1.append(Int32(0)) } }"
+            case .enumArray(_, _, .byte, _, nullable: false):
+                "\(parcel).append(bytes: \(value).map { UInt8(bitPattern: $0.rawValue) })"
+            case .enumArray(_, _, .byte, _, nullable: true):
+                "if let value = \(value) { \(parcel).append(bytes: value.map { UInt8(bitPattern: $0.rawValue) }) } else { \(parcel).appendNullBytes() }"
+            case let .enumArray(_, _, backing, codec, _):
+                "try \(codec).write(\(value), to: &\(parcel)) { $1.\(backing.append("$0.rawValue")) }"
             case .parcelable(_, _, nullable: false): "try \(value).writeTypedObject(to: &\(parcel))"
             case .parcelable(_, _, nullable: true):
                 "if let value = \(value) { try value.writeTypedObject(to: &\(parcel)) } else { \(parcel).append(Int32(0)) }"
