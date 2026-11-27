@@ -29,6 +29,10 @@ import Testing
             Choice echoChoice(in Choice value);
             int[] echoInts(in int[] value);
             @nullable long[] echoLongs(in @nullable long[] value);
+            boolean[] echoBools(in boolean[] value);
+            char[] echoChars(in char[] value);
+            float[] echoFloats(in float[] value);
+            @nullable double[] echoDoubles(in @nullable double[] value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -145,6 +149,13 @@ import Testing
     #expect(try await proxy.echoInts([]).isEmpty)
     #expect(try await proxy.echoLongs([.min, .max]) == [Int64.min, Int64.max])
     #expect(try await proxy.echoLongs(nil) == nil)
+    #expect(try await proxy.echoBools([false, true, false]) == [false, true, false])
+    #expect(try await proxy.echoChars([0, 0xD800, 0xFFFF]) == [0, 0xD800, 0xFFFF])
+    let floats: [Float] = [-0.0, Float(bitPattern: 0x7FC0_1234), .infinity]
+    #expect(try await proxy.echoFloats(floats).map(\.bitPattern) == floats.map(\.bitPattern))
+    let doubles: [Double] = [-0.0, Double(bitPattern: 0x7FF8_0000_0000_1234), -.infinity]
+    #expect(try await proxy.echoDoubles(doubles)?.map(\.bitPattern) == doubles.map(\.bitPattern))
+    #expect(try await proxy.echoDoubles(nil) == nil)
 
     var truncated = Parcel()
     truncated.appendInterfaceToken(IEchoProxy.descriptor)
@@ -404,4 +415,12 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoInts(_ value: [Int32]) async throws -> [Int32] { value }
 
     override func echoLongs(_ value: [Int64]?) async throws -> [Int64]? { value }
+
+    override func echoBools(_ value: [Bool]) async throws -> [Bool] { value }
+
+    override func echoChars(_ value: [UInt16]) async throws -> [UInt16] { value }
+
+    override func echoFloats(_ value: [Float]) async throws -> [Float] { value }
+
+    override func echoDoubles(_ value: [Double]?) async throws -> [Double]? { value }
 }
