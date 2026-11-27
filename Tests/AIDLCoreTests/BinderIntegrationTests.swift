@@ -7,6 +7,7 @@ import Testing
     let source = """
         package demo;
         import demo.Chunk;
+        import demo.EnumFields;
         import demo.Choice;
         import demo.Mode;
         import demo.ByteMode;
@@ -40,6 +41,7 @@ import Testing
             @nullable List<Chunk> echoOptionalChunks(in @nullable List<Chunk> value);
             @nullable Mode[] echoModes(in @nullable Mode[] value);
             ByteMode[] echoByteModes(in ByteMode[] value);
+            EnumFields echoEnumFields(in EnumFields value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -66,11 +68,13 @@ import Testing
     let choice = package.appendingPathComponent("Choice.aidl")
     try """
         package demo;
+        import demo.Mode;
         union Choice {
             int number;
             long big;
             String text;
             @nullable byte[] data;
+            Mode mode;
         }
         """.write(to: choice, atomically: true, encoding: .utf8)
     let byteMode = package.appendingPathComponent("ByteMode.aidl")
@@ -78,6 +82,17 @@ import Testing
         package demo;
         enum ByteMode { NONE, HIGH = -7 }
         """.write(to: byteMode, atomically: true, encoding: .utf8)
+    let enumFields = package.appendingPathComponent("EnumFields.aidl")
+    try """
+        package demo;
+        import demo.Mode;
+        import demo.ByteMode;
+        parcelable EnumFields {
+            Mode mode = Mode.RUNNING;
+            ByteMode byteMode = ByteMode.HIGH;
+            ByteMode implicitMode;
+        }
+        """.write(to: enumFields, atomically: true, encoding: .utf8)
 
     // Compile a checked-in copy of the generated source as part of this test target.
     let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -88,6 +103,7 @@ import Testing
         (mode, "GeneratedMode.swift"),
         (choice, "GeneratedChoice.swift"),
         (byteMode, "GeneratedByteMode.swift"),
+        (enumFields, "GeneratedEnumFields.swift"),
     ] {
         let emitted = try compiler.compile(
             sourcePath: source.path, includePaths: [directory.path],
@@ -185,6 +201,13 @@ import Testing
     #expect(try await proxy.echoModes([.IDLE, unknownMode]) == [.IDLE, unknownMode])
     #expect(try await proxy.echoModes(nil) == nil)
     #expect(try await proxy.echoByteModes([.HIGH, ByteMode(rawValue: .min)]) == [.HIGH, ByteMode(rawValue: .min)])
+    let fields = try await proxy.echoEnumFields(EnumFields(mode: unknownMode, byteMode: .HIGH))
+    #expect(fields.mode == unknownMode && fields.byteMode == .HIGH && fields.implicitMode.rawValue == 0)
+    guard case let .mode(unionMode) = try await proxy.echoChoice(.mode(unknownMode)) else {
+        Issue.record("Expected the enum union variant")
+        return
+    }
+    #expect(unionMode == unknownMode)
 
     var byteModes = Parcel()
     byteModes.appendInterfaceToken(IEchoProxy.descriptor)
@@ -248,7 +271,7 @@ import Testing
     #expect(parcel.bytes == [1, 0, 0, 0, 1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0])
 
     var invalid = Parcel()
-    invalid.append(Int32(4))
+    invalid.append(Int32(5))
     var reader = invalid.reader()
     #expect(throws: BinderError.failedTransaction) {
         try Choice(from: &reader)
@@ -265,6 +288,25 @@ import Testing
     #expect(throws: ParcelError.invalidLength(-1)) {
         try Choice(from: &invalidTextReader)
     }
+}
+
+@Test func generatedEnumFieldsUseBackingAndDeclaredDefaults() throws {
+    let initialized = EnumFields()
+    #expect(initialized.mode == .RUNNING)
+    #expect(initialized.byteMode == .HIGH)
+    #expect(initialized.implicitMode.rawValue == 0)
+
+    var parcel = Parcel()
+    try initialized.write(to: &parcel)
+    #expect(parcel.bytes == [16, 0, 0, 0, 4, 0, 0, 0, 249, 255, 255, 255, 0, 0, 0, 0])
+
+    var older = Parcel()
+    older.append(Int32(8))
+    older.append(Int32(17))
+    var reader = older.reader()
+    let decoded = try EnumFields(from: &reader)
+    #expect(decoded.mode.rawValue == 17)
+    #expect(decoded.byteMode == .HIGH && decoded.implicitMode.rawValue == 0)
 }
 
 private final class NullStringEndpoint: IBinder {
@@ -486,4 +528,6 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoModes(_ value: [Mode]?) async throws -> [Mode]? { value }
 
     override func echoByteModes(_ value: [ByteMode]) async throws -> [ByteMode] { value }
+
+    override func echoEnumFields(_ value: EnumFields) async throws -> EnumFields { value }
 }
