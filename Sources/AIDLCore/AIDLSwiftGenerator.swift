@@ -40,7 +40,7 @@ struct AIDLSwiftGenerator {
     }
 
     private func generateInterface(_ interface: AIDLInterface) throws -> [String] {
-        guard interface.annotations.isEmpty, interface.nestedDeclarations.isEmpty else {
+        guard wireAnnotations(interface.annotations).isEmpty, interface.nestedDeclarations.isEmpty else {
             throw failure("Swift generation does not support interface annotations or nested declarations")
         }
         let name = try identifier(interface.name)
@@ -416,8 +416,9 @@ struct AIDLSwiftGenerator {
         let context = "method '\(method.name)'"
         _ = try identifier(method.name)
         // The parser preserves annotations before the return type on the method.
-        let returnAnnotations = method.annotations + method.returnType.annotations
-        guard method.annotations.isEmpty || isNullableAnnotation(returnAnnotations) else {
+        let leadingAnnotations = wireAnnotations(method.annotations, on: method.returnType)
+        let returnAnnotations = leadingAnnotations + wireAnnotations(method.returnType.annotations, on: method.returnType)
+        guard leadingAnnotations.isEmpty || isNullableAnnotation(returnAnnotations) else {
             throw failure("Swift generation does not support annotations on \(context)")
         }
         // AOSP reserves the top 100 method IDs for compiler metadata.
@@ -426,10 +427,10 @@ struct AIDLSwiftGenerator {
         }
 
         let result: WireType?
-        if method.returnType.name == "void", isPlain(method.returnType), method.annotations.isEmpty {
+        if method.returnType.name == "void", isPlain(method.returnType), leadingAnnotations.isEmpty {
             result = nil
         } else {
-            result = try wireType(method.returnType, leadingAnnotations: method.annotations, context: context)
+            result = try wireType(method.returnType, leadingAnnotations: leadingAnnotations, context: context)
         }
         let isOneway = interfaceIsOneway || method.isOneway
         if isOneway, result != nil {
@@ -445,7 +446,7 @@ struct AIDLSwiftGenerator {
                 guard !isOneway,
                       (parameter.direction == .inoutDirection && (isArray || isList))
                           || (parameter.direction == .out && isList),
-                      parameter.type.annotations.isEmpty else {
+                      wireAnnotations(parameter.type.annotations, on: parameter.type).isEmpty else {
                     throw failure("unsupported parameter direction for '\(parameter.name)' in \(context)")
                 }
                 outputParameters.append(index)
@@ -462,7 +463,7 @@ struct AIDLSwiftGenerator {
     }
 
     private func wireType(_ type: AIDLType, leadingAnnotations: [AIDLAnnotation] = [], context: String) throws -> WireType {
-        let annotations = leadingAnnotations + type.annotations
+        let annotations = wireAnnotations(leadingAnnotations + type.annotations, on: type)
         let nullable = isNullableAnnotation(annotations)
         if let reference = referenceType(type) {
             if annotations.isEmpty || nullable { return .reference(reference, nullable: nullable) }
@@ -594,7 +595,7 @@ struct AIDLSwiftGenerator {
     }
 
     private func enumBacking(_ enumeration: AIDLEnum) throws -> Scalar {
-        guard enumeration.annotations.allSatisfy({ $0.name == "Backing" }) else {
+        guard wireAnnotations(enumeration.annotations).allSatisfy({ $0.name == "Backing" }) else {
             throw failure("unsupported annotations on enum '\(enumeration.name)'")
         }
         switch try enumeration.integerBacking() {
@@ -641,11 +642,25 @@ struct AIDLSwiftGenerator {
         annotations.count == 1 && annotations[0].name == "nullable" && annotations[0].arguments.isEmpty
     }
 
+    private func wireAnnotations(_ annotations: [AIDLAnnotation], on type: AIDLType? = nil) -> [AIDLAnnotation] {
+        annotations.filter { annotation in
+            switch annotation.name {
+            case "JavaPassthrough", "UnsupportedAppUsage", "JavaDerive", "SuppressWarnings":
+                false
+            case "utf8InCpp":
+                // The C++ API uses UTF-8 and still sends UTF-16 on the wire.
+                !(type?.name == "String" && annotation.arguments.isEmpty)
+            default:
+                true
+            }
+        }
+    }
+
     private func parcelableFields(
         _ parcelable: AIDLParcelable, declaredIn file: AIDLFile, ancestors: Set<String> = []
     ) throws -> [(name: String, field: ParcelableField, initialValue: String)] {
         let name = parcelable.name
-        guard !parcelable.isOpaqueForwardDecl, parcelable.annotations.isEmpty,
+        guard !parcelable.isOpaqueForwardDecl, wireAnnotations(parcelable.annotations).isEmpty,
               parcelable.typeParameters.isEmpty, parcelable.constants.isEmpty,
               parcelable.nestedDeclarations.isEmpty else {
             throw failure("Swift generation requires a plain structured parcelable for '\(name)'")
@@ -665,17 +680,18 @@ struct AIDLSwiftGenerator {
     private func inlineField(
         _ type: AIDLType, in file: AIDLFile, owner: String, context: String, ancestors: Set<String>
     ) throws -> ParcelableField {
-        let nullable = isNullableAnnotation(type.annotations)
-        if let reference = referenceType(type), nullable || type.annotations.isEmpty {
+        let annotations = wireAnnotations(type.annotations, on: type)
+        let nullable = isNullableAnnotation(annotations)
+        if let reference = referenceType(type), nullable || annotations.isEmpty {
             return .reference(reference, nullable: nullable)
         }
-        if nullable || type.annotations.isEmpty,
+        if nullable || annotations.isEmpty,
            let collection = try collectionWireType(
                type, in: file, owner: owner, nullable: nullable, context: context, ancestors: ancestors
            ) {
             return .collection(collection, nullable: nullable)
         }
-        if type.arrayDimensions == 0, type.typeArguments.isEmpty, type.annotations.isEmpty || nullable,
+        if type.arrayDimensions == 0, type.typeArguments.isEmpty, annotations.isEmpty || nullable,
            let qualifiedName = try? resolver.resolveName(type.name, in: file, scope: [owner]),
            let symbol = resolver.symbols[qualifiedName] {
             switch symbol.declaration {
@@ -748,7 +764,8 @@ struct AIDLSwiftGenerator {
     private func unionFields(
         _ union: AIDLUnion, declaredIn file: AIDLFile, ancestors: Set<String> = []
     ) throws -> [(name: String, field: ParcelableField)] {
-        guard union.annotations.isEmpty, union.constants.isEmpty, union.nestedDeclarations.isEmpty, !union.fields.isEmpty else {
+        guard wireAnnotations(union.annotations).isEmpty, union.constants.isEmpty,
+              union.nestedDeclarations.isEmpty, !union.fields.isEmpty else {
             throw failure("Swift generation requires a plain union with at least one field for '\(union.name)'")
         }
         let ancestry = try fieldAncestry(for: union.name, in: file, ancestors: ancestors)
@@ -947,7 +964,7 @@ struct AIDLSwiftGenerator {
     }
 
     private func isPlain(_ type: AIDLType) -> Bool {
-        type.arrayDimensions == 0 && type.typeArguments.isEmpty && type.annotations.isEmpty
+        type.arrayDimensions == 0 && type.typeArguments.isEmpty && wireAnnotations(type.annotations, on: type).isEmpty
     }
 
     private func identifier(_ value: String) throws -> String {
