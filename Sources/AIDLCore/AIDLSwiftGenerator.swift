@@ -25,8 +25,8 @@ struct AIDLSwiftGenerator {
             lines = try generateParcelable(parcelable)
         case let .enumeration(enumeration):
             lines = try generateEnum(enumeration)
-        default:
-            throw failure("Swift generation requires an interface, structured parcelable, or enum")
+        case let .union(union):
+            lines = try generateUnion(union)
         }
         return (Self.header + lines + [""]).joined(separator: "\n")
     }
@@ -226,6 +226,9 @@ struct AIDLSwiftGenerator {
                 case let .parcelable(parcelable):
                     _ = try parcelableFields(parcelable)
                     return .parcelable(swiftName, qualifiedName: name, nullable: nullable)
+                case let .union(union):
+                    _ = try unionFields(union)
+                    return .parcelable(swiftName, qualifiedName: name, nullable: nullable)
                 case let .enumeration(enumeration) where !nullable:
                     let backing = try enumBacking(enumeration)
                     return .enumeration(swiftName, qualifiedName: name, backing: backing)
@@ -291,8 +294,19 @@ struct AIDLSwiftGenerator {
               parcelable.nestedDeclarations.isEmpty else {
             throw failure("Swift generation requires a plain structured parcelable for '\(name)'")
         }
+        return try scalarFields(parcelable.fields, in: name)
+    }
+
+    private func unionFields(_ union: AIDLUnion) throws -> [(name: String, type: Scalar)] {
+        guard union.annotations.isEmpty, union.constants.isEmpty, union.nestedDeclarations.isEmpty, !union.fields.isEmpty else {
+            throw failure("Swift generation requires a plain union with at least one field for '\(union.name)'")
+        }
+        return try scalarFields(union.fields, in: union.name)
+    }
+
+    private func scalarFields(_ fields: [AIDLField], in name: String) throws -> [(name: String, type: Scalar)] {
         var fieldNames = Set<String>()
-        return try parcelable.fields.map { field in
+        return try fields.map { field in
             let context = "field '\(name).\(field.name)'"
             _ = try identifier(field.name)
             guard fieldNames.insert(field.name).inserted,
@@ -304,6 +318,42 @@ struct AIDLSwiftGenerator {
             }
             return (escaped(field.name), try scalar(field.type, context: context))
         }
+    }
+
+    private func generateUnion(_ union: AIDLUnion) throws -> [String] {
+        let name = escaped(try identifier(union.name))
+        let fields = try unionFields(union)
+        var lines = ["public enum \(name): BinderParcelable {"]
+        lines += fields.map { "    case \($0.name)(\($0.type.swiftType))" }
+        lines += [
+            "",
+            "    public init(from reader: inout Parcel.Reader) throws {",
+            "        switch try reader.readInt32() {",
+        ]
+        for (tag, field) in fields.enumerated() {
+            lines += [
+                "        case \(tag):",
+                "            self = try .\(field.name)(\(field.type.read(from: "reader")))",
+            ]
+        }
+        lines += [
+            "        default:",
+            "            throw BinderError.failedTransaction",
+            "        }",
+            "    }",
+            "",
+            "    public func write(to parcel: inout Parcel) throws {",
+            "        switch self {",
+        ]
+        for (tag, field) in fields.enumerated() {
+            lines += [
+                "        case let .\(field.name)(value):",
+                "            parcel.append(Int32(\(tag)))",
+                "            parcel.\(field.type.append("value"))",
+            ]
+        }
+        lines += ["        }", "    }"]
+        return lines + Self.typedObjectMethods + ["}"]
     }
 
     private func generateParcelable(_ parcelable: AIDLParcelable) throws -> [String] {
@@ -338,27 +388,27 @@ struct AIDLSwiftGenerator {
             "        parcel.append(Int32(\(wireSize)))",
         ]
         lines += fields.map { "        parcel.\($0.type.append("self." + $0.name))" }
-        lines += [
-            "    }",
-            "",
-            "    public static func readTypedObject(from reader: inout Parcel.Reader) throws -> Self {",
-            "        guard let value = try readNullableTypedObject(from: &reader) else { throw BinderError.failedTransaction }",
-            "        return value",
-            "    }",
-            "",
-            "    public static func readNullableTypedObject(from reader: inout Parcel.Reader) throws -> Self? {",
-            "        guard try reader.readInt32() != 0 else { return nil }",
-            "        return try Self(from: &reader)",
-            "    }",
-            "",
-            "    public func writeTypedObject(to parcel: inout Parcel) throws {",
-            "        parcel.append(Int32(1))",
-            "        try write(to: &parcel)",
-            "    }",
-            "}",
-        ]
-        return lines
+        lines.append("    }")
+        return lines + Self.typedObjectMethods + ["}"]
     }
+
+    private static let typedObjectMethods = [
+        "",
+        "    public static func readTypedObject(from reader: inout Parcel.Reader) throws -> Self {",
+        "        guard let value = try readNullableTypedObject(from: &reader) else { throw BinderError.failedTransaction }",
+        "        return value",
+        "    }",
+        "",
+        "    public static func readNullableTypedObject(from reader: inout Parcel.Reader) throws -> Self? {",
+        "        guard try reader.readInt32() != 0 else { return nil }",
+        "        return try Self(from: &reader)",
+        "    }",
+        "",
+        "    public func writeTypedObject(to parcel: inout Parcel) throws {",
+        "        parcel.append(Int32(1))",
+        "        try write(to: &parcel)",
+        "    }",
+    ]
 
     private func scalar(_ type: AIDLType, context: String) throws -> Scalar {
         guard isPlain(type), let scalar = Scalar(rawValue: type.name) else {
