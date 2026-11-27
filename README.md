@@ -96,6 +96,13 @@ corresponding metadata transactions. Supply the version and hash for the
 interface snapshot you compiled. The generated stub returns those values,
 and the proxy queries the remote interface at the reserved transaction codes.
 
+Use `--client-method <name>` to generate a client for selected methods of a
+larger interface. Repeat the option for multiple methods. Generation still
+analyzes the full AIDL definition and preserves each selected method's
+original transaction code. The output includes the selected protocol and
+proxy. For example, select `getWifiEnabledState` from AOSP's `IWifiManager`
+using its normal include roots.
+
 Generated proxies accept the `RemoteProxy` returned by Binder service lookup.
 For example, if a service implements the generated `IEcho` interface:
 
@@ -129,6 +136,7 @@ Paths are relative to the target's source directory. Use `preprocessedPaths`
 for optional SDK declaration files. List each declaration you want emitted
 under `sources`. The optional `interfaceMetadata` object uses those same paths
 to configure Stable AIDL version or hash transactions per interface.
+The optional `clientMethods` object maps source paths to arrays of method names.
 Use distinct filenames. Add `aidl-config.json` and `AIDL`
 to the target's `exclude` list so SwiftPM leaves them to the plugin. The plugin
 generates and compiles the Swift bindings during the build.
