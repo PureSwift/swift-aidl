@@ -25,7 +25,8 @@ swift run aidl-swift generate -o IEcho.swift IEcho.aidl
 ```
 
 The generator emits a Swift protocol, proxy, stub, and transaction codes for
-each interface. It supports scalar input parameters and return values
+each interface. It exposes evaluated `byte`, `int`, and `long` interface
+constants as static Swift properties. It supports scalar input parameters and return values
 (`byte`, `int`, `long`, `boolean`, `char`, `float`, and `double`), `void`
 methods, and one-way calls. Interface methods also support `String` and
 `@nullable String` inputs and results using Binder's UTF-16 string encoding.
