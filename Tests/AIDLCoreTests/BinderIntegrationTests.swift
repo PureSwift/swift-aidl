@@ -8,6 +8,7 @@ import Testing
         package demo;
         import demo.Chunk;
         import demo.EnumFields;
+        import demo.Nested;
         import demo.Choice;
         import demo.Mode;
         import demo.ByteMode;
@@ -42,6 +43,7 @@ import Testing
             @nullable Mode[] echoModes(in @nullable Mode[] value);
             ByteMode[] echoByteModes(in ByteMode[] value);
             EnumFields echoEnumFields(in EnumFields value);
+            Nested echoNested(in Nested value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -93,6 +95,19 @@ import Testing
             ByteMode implicitMode;
         }
         """.write(to: enumFields, atomically: true, encoding: .utf8)
+    let payload = package.appendingPathComponent("Payload.aidl")
+    try payloadAIDL.write(to: payload, atomically: true, encoding: .utf8)
+    let nested = package.appendingPathComponent("Nested.aidl")
+    try """
+        package demo;
+        import demo.Payload;
+        import demo.Chunk;
+        parcelable Nested {
+            @nullable Payload payload;
+            Chunk child;
+            int tail;
+        }
+        """.write(to: nested, atomically: true, encoding: .utf8)
 
     // Compile a checked-in copy of the generated source as part of this test target.
     let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -104,6 +119,7 @@ import Testing
         (choice, "GeneratedChoice.swift"),
         (byteMode, "GeneratedByteMode.swift"),
         (enumFields, "GeneratedEnumFields.swift"),
+        (nested, "GeneratedNested.swift"),
     ] {
         let emitted = try compiler.compile(
             sourcePath: source.path, includePaths: [directory.path],
@@ -208,6 +224,14 @@ import Testing
         return
     }
     #expect(unionMode == unknownMode)
+    let nestedResult = try await proxy.echoNested(Nested(
+        payload: Payload(id: 7, name: "A😀", data: [255]),
+        child: Chunk(id: 42, count: .min), tail: 17
+    ))
+    #expect(nestedResult.payload?.name == "A😀")
+    #expect(nestedResult.payload?.data == [255])
+    #expect(nestedResult.child.id == 42 && nestedResult.child.count == .min && nestedResult.tail == 17)
+    #expect(try await proxy.echoNested(Nested()).payload == nil)
 
     var byteModes = Parcel()
     byteModes.appendInterfaceToken(IEchoProxy.descriptor)
@@ -371,9 +395,7 @@ private final class NullStringEndpoint: IBinder {
     #expect(try malformedReader.readInt32() == 42)
 }
 
-@Test func generatedParcelableSizesVariableLengthFields() throws {
-    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
-    try """
+private let payloadAIDL = """
         package demo;
         parcelable Payload {
             int id;
@@ -382,7 +404,11 @@ private final class NullStringEndpoint: IBinder {
             @nullable String note;
             byte[] trailer;
         }
-        """.write(to: path, atomically: true, encoding: .utf8)
+        """
+
+@Test func generatedParcelableSizesVariableLengthFields() throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try payloadAIDL.write(to: path, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(at: path) }
     let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         .appendingPathComponent("GeneratedPayload.swift")
@@ -421,6 +447,26 @@ private final class NullStringEndpoint: IBinder {
     malformed.appendNullString()
     var malformedReader = malformed.reader()
     #expect(throws: ParcelError.invalidLength(-1)) { try Payload(from: &malformedReader) }
+}
+
+@Test func generatedNestedParcelableRespectsParentFrame() throws {
+    var parcel = Parcel()
+    try Nested(child: Chunk(id: 3), tail: 9).write(to: &parcel)
+    #expect(parcel.bytes.count == 36)
+    var header = parcel.reader()
+    #expect(try header.readInt32() == 36)
+    #expect(try header.readInt32() == 0)
+    #expect(try header.readInt32() == 1)
+    #expect(try header.readInt32() == 20)
+
+    var truncated = Parcel()
+    truncated.append(Int32(12))
+    truncated.append(Int32(0))
+    truncated.append(Int32(1))
+    truncated.append(Int32(20))
+    var reader = truncated.reader()
+    #expect(throws: ParcelError.endOfParcel) { try Nested(from: &reader) }
+    #expect(try reader.readInt32() == 20)
 }
 
 @Test func generatedParcelableUsesExplicitDefaultsForMissingFields() throws {
@@ -530,4 +576,6 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoByteModes(_ value: [ByteMode]) async throws -> [ByteMode] { value }
 
     override func echoEnumFields(_ value: EnumFields) async throws -> EnumFields { value }
+
+    override func echoNested(_ value: Nested) async throws -> Nested { value }
 }
