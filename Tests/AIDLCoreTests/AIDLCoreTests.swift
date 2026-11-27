@@ -20,3 +20,17 @@ func rejectsUnsupportedSwiftGeneration(_ source: String) throws {
         try AIDLCompiler().compile(sourcePath: path.path)
     }
 }
+
+@Test(arguments: [
+    #"const String A = B; const String B = A;"#,
+    #"const String A = "invalid\n";"#,
+    #"const String A = "x" + 7;"#,
+])
+func rejectsInvalidStringConstants(_ members: String) throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try "interface Example { \(members) }".write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    #expect(throws: AIDLConstantEvaluationError.self) {
+        try AIDLCompiler().compile(sourcePath: path.path)
+    }
+}
