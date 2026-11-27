@@ -279,6 +279,45 @@ private final class NullStringEndpoint: IBinder {
     #expect(throws: ParcelError.invalidLength(-1)) { try Payload(from: &malformedReader) }
 }
 
+@Test func generatedParcelableUsesExplicitDefaultsForMissingFields() throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try """
+        package demo;
+        parcelable Defaults {
+            int mask = (1 << 4) | 3;
+            byte level = -7;
+            boolean enabled = true;
+            String title = "hello " + "binder";
+            @nullable String note = "default";
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedDefaults.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+
+    let initialized = Defaults()
+    #expect(initialized.mask == 19)
+    #expect(initialized.level == -7)
+    #expect(initialized.enabled)
+    #expect(initialized.title == "hello binder")
+    #expect(initialized.note == "default")
+
+    var older = Parcel()
+    older.append(Int32(8))
+    older.append(Int32(42))
+    var oldReader = older.reader()
+    let decoded = try Defaults(from: &oldReader)
+    #expect(decoded.mask == 42 && decoded.level == initialized.level)
+    #expect(decoded.enabled && decoded.title == initialized.title && decoded.note == initialized.note)
+
+    var parcel = Parcel()
+    try Defaults(mask: 0, enabled: false, title: "", note: nil).write(to: &parcel)
+    var reader = parcel.reader()
+    let supplied = try Defaults(from: &reader)
+    #expect(supplied.mask == 0 && !supplied.enabled && supplied.title.isEmpty && supplied.note == nil)
+}
+
 private actor EchoEvents {
     private(set) var lastValue: Int64?
 
