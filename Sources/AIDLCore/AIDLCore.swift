@@ -29,7 +29,7 @@ public struct AIDLCompiler: Sendable {
         return graph
     }
 
-    /// Emits Swift bindings for the root interface, structured parcelable, or enum.
+    /// Emits Swift bindings for the root interface, structured parcelable, enum, or union.
     public func compile(
         sourcePath: String,
         includePaths: [String] = [],
