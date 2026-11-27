@@ -32,13 +32,17 @@ extension AIDLSwift {
         @Option(help: "Emit the Stable AIDL interface-hash transaction with this hash.")
         var interfaceHash: String?
 
+        @Option(name: .customLong("manual-parcelable"), help: "Use a hand-written BinderParcelable for this fully qualified AIDL type.")
+        var manualParcelables: [String] = []
+
         @Argument(help: "The root AIDL source file.")
         var sourcePath: String
 
         func run() throws {
             let source = try AIDLCompiler().compile(
                 sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths,
-                interfaceVersion: interfaceVersion, interfaceHash: interfaceHash
+                interfaceVersion: interfaceVersion, interfaceHash: interfaceHash,
+                manualParcelables: Set(manualParcelables)
             )
             if let output {
                 try source.write(toFile: output, atomically: true, encoding: .utf8)
