@@ -46,6 +46,11 @@ AIDL unions with scalar fields generate Swift enums with associated values.
 The wire tag follows declaration order and only the active value is encoded.
 Generate imported unions separately alongside their interfaces.
 
+For Stable AIDL, pass `--interface-version` and `--interface-hash` to emit the
+corresponding metadata transactions. Supply the version and hash for the
+interface snapshot you compiled. The generated stub returns those values,
+and the proxy queries the remote interface at the reserved transaction codes.
+
 Generated proxies accept the `RemoteProxy` returned by Binder service lookup.
 For example, if a service implements the generated `IEcho` interface:
 
@@ -68,13 +73,18 @@ For example:
 ```json
 {
   "sources": ["AIDL/demo/IEcho.aidl", "AIDL/demo/Chunk.aidl"],
-  "includePaths": ["AIDL"]
+  "includePaths": ["AIDL"],
+  "interfaceMetadata": {
+    "AIDL/demo/IEcho.aidl": { "version": 3, "hash": "notfrozen" }
+  }
 }
 ```
 
 Paths are relative to the target's source directory. Use `preprocessedPaths`
 for optional SDK declaration files. List each declaration you want emitted
-under `sources` and use distinct filenames. Add `aidl-config.json` and `AIDL`
+under `sources`. The optional `interfaceMetadata` object uses those same paths
+to configure Stable AIDL version or hash transactions per interface.
+Use distinct filenames. Add `aidl-config.json` and `AIDL`
 to the target's `exclude` list so SwiftPM leaves them to the plugin. The plugin
 generates and compiles the Swift bindings during the build.
 
