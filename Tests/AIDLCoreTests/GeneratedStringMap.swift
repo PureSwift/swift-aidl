@@ -41,22 +41,22 @@ public struct IStringMapProxy: `IStringMap`, BinderProxy {
     public func `echo`(_ argument0: [String: String]) async throws -> [String: String] {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
-        try IStringMapMapCodec.write(argument0, to: &request)
+        try IStringMapMapCodec.write(argument0, to: &request) { $1.append($0) }
         let reply = try await remote.transact(code: IStringMapTransactionCode.`echo`, data: request, flags: [])
         var reader = reply.reader()
         try reader.readException()
-        guard let result = try IStringMapMapCodec.read(from: &reader) else { throw ParcelError.invalidLength(-1) }
+        guard let result = try IStringMapMapCodec.read(from: &reader, readValue: IStringMapMapCodec.readRequiredString) else { throw ParcelError.invalidLength(-1) }
         return result
     }
 
     public func `echoOptional`(_ argument0: [String: String]?) async throws -> [String: String]? {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
-        try IStringMapMapCodec.write(argument0, to: &request)
+        try IStringMapMapCodec.write(argument0, to: &request) { $1.append($0) }
         let reply = try await remote.transact(code: IStringMapTransactionCode.`echoOptional`, data: request, flags: [])
         var reader = reply.reader()
         try reader.readException()
-        return try IStringMapMapCodec.read(from: &reader)
+        return try IStringMapMapCodec.read(from: &reader, readValue: IStringMapMapCodec.readRequiredString)
     }
 }
 
@@ -81,19 +81,19 @@ open class IStringMapStub: BinderStub, `IStringMap`, @unchecked Sendable {
         switch code {
         case IStringMapTransactionCode.`echo`:
             try data.enforceInterface(Self.descriptor)
-            guard let argument0 = try IStringMapMapCodec.read(from: &data) else { throw ParcelError.invalidLength(-1) }
+            guard let argument0 = try IStringMapMapCodec.read(from: &data, readValue: IStringMapMapCodec.readRequiredString) else { throw ParcelError.invalidLength(-1) }
             guard data.isAtEnd else { throw BinderError.failedTransaction }
             let result = try await self.`echo`(argument0)
             reply.writeNoException()
-            try IStringMapMapCodec.write(result, to: &reply)
+            try IStringMapMapCodec.write(result, to: &reply) { $1.append($0) }
             return true
         case IStringMapTransactionCode.`echoOptional`:
             try data.enforceInterface(Self.descriptor)
-            let argument0 = try IStringMapMapCodec.read(from: &data)
+            let argument0 = try IStringMapMapCodec.read(from: &data, readValue: IStringMapMapCodec.readRequiredString)
             guard data.isAtEnd else { throw BinderError.failedTransaction }
             let result = try await self.`echoOptional`(argument0)
             reply.writeNoException()
-            try IStringMapMapCodec.write(result, to: &reply)
+            try IStringMapMapCodec.write(result, to: &reply) { $1.append($0) }
             return true
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)
@@ -102,22 +102,31 @@ open class IStringMapStub: BinderStub, `IStringMap`, @unchecked Sendable {
 }
 
 private enum IStringMapMapCodec {
-    static func read(from reader: inout Parcel.Reader) throws -> [String: String]? {
+    static func read<Value>(
+        from reader: inout Parcel.Reader, readValue: (inout Parcel.Reader) throws -> Value
+    ) throws -> [String: Value]? {
         let count = try reader.readInt32()
         if count == -1 { return nil }
         guard count >= 0 else { throw ParcelError.invalidLength(count) }
         guard Int(count) <= reader.remaining / 8 else { throw ParcelError.endOfParcel }
-        var values: [String: String] = [:]
+        var values: [String: Value] = [:]
         for _ in 0..<count {
-            guard let key = try reader.readString(), let value = try reader.readString() else {
-                throw ParcelError.invalidLength(-1)
-            }
+            let key = try readRequiredString(from: &reader)
+            let value = try readValue(&reader)
             guard values.updateValue(value, forKey: key) == nil else { throw BinderError.failedTransaction }
         }
         return values
     }
 
-    static func write(_ values: [String: String]?, to parcel: inout Parcel) throws {
+    static func readRequiredString(from reader: inout Parcel.Reader) throws -> String {
+        guard let value = try reader.readString() else { throw ParcelError.invalidLength(-1) }
+        return value
+    }
+
+    static func write<Value>(
+        _ values: [String: Value]?, to parcel: inout Parcel,
+        writeValue: (Value, inout Parcel) throws -> Void
+    ) throws {
         guard let values else {
             parcel.append(Int32(-1))
             return
@@ -126,7 +135,7 @@ private enum IStringMapMapCodec {
         parcel.append(count)
         for (key, value) in values.sorted(by: { $0.key < $1.key }) {
             parcel.append(key)
-            parcel.append(value)
+            try writeValue(value, &parcel)
         }
     }
 }
