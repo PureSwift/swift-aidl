@@ -13,6 +13,7 @@ public protocol `IEcho`: BinderInterface {
     func `echoBytes`(_ argument0: [UInt8]) async throws -> [UInt8]
     func `echoOptionalBytes`(_ argument0: [UInt8]?) async throws -> [UInt8]?
     func `echoMode`(_ argument0: `Mode`) async throws -> `Mode`
+    func `echoChoice`(_ argument0: `Choice`) async throws -> `Choice`
 }
 
 public extension `IEcho` {
@@ -31,6 +32,7 @@ public enum IEchoTransactionCode {
     public static let `echoBytes`: UInt32 = 9
     public static let `echoOptionalBytes`: UInt32 = 10
     public static let `echoMode`: UInt32 = 11
+    public static let `echoChoice`: UInt32 = 12
 }
 
 public struct IEchoProxy: `IEcho`, BinderProxy {
@@ -150,6 +152,16 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         try reader.readException()
         return try `Mode`(rawValue: reader.readInt32())
     }
+
+    public func `echoChoice`(_ argument0: `Choice`) async throws -> `Choice` {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try argument0.writeTypedObject(to: &request)
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoChoice`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try `Choice`.readTypedObject(from: &reader)
+    }
 }
 
 open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
@@ -201,6 +213,10 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoMode`(_ argument0: `Mode`) async throws -> `Mode` {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoMode`)
+    }
+
+    open func `echoChoice`(_ argument0: `Choice`) async throws -> `Choice` {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoChoice`)
     }
 
     public override func onTransact(
@@ -294,6 +310,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`echoMode`(argument0)
             reply.writeNoException()
             reply.append(result.rawValue)
+            return true
+        case IEchoTransactionCode.`echoChoice`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try `Choice`.readTypedObject(from: &data)
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoChoice`(argument0)
+            reply.writeNoException()
+            try result.writeTypedObject(to: &reply)
             return true
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)
