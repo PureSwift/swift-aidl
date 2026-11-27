@@ -4,6 +4,8 @@ import Binder
 public enum `Choice`: BinderParcelable {
     case `number`(Int32)
     case `big`(Int64)
+    case `text`(String)
+    case `data`([UInt8]?)
 
     public init(from reader: inout Parcel.Reader) throws {
         switch try reader.readInt32() {
@@ -11,6 +13,11 @@ public enum `Choice`: BinderParcelable {
             self = try .`number`(reader.readInt32())
         case 1:
             self = try .`big`(reader.readInt64())
+        case 2:
+            guard let value = try reader.readString() else { throw ParcelError.invalidLength(-1) }
+            self = .`text`(value)
+        case 3:
+            self = try .`data`(reader.readBytes())
         default:
             throw BinderError.failedTransaction
         }
@@ -24,6 +31,12 @@ public enum `Choice`: BinderParcelable {
         case let .`big`(value):
             parcel.append(Int32(1))
             parcel.append(value)
+        case let .`text`(value):
+            parcel.append(Int32(2))
+            parcel.append(value)
+        case let .`data`(value):
+            parcel.append(Int32(3))
+            if let value = value { parcel.append(bytes: value) } else { parcel.appendNullBytes() }
         }
     }
 
