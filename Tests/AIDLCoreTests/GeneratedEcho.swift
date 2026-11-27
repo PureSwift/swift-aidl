@@ -12,6 +12,7 @@ public protocol `IEcho`: BinderInterface {
     func `echoOptionalText`(_ argument0: String?) async throws -> String?
     func `echoBytes`(_ argument0: [UInt8]) async throws -> [UInt8]
     func `echoOptionalBytes`(_ argument0: [UInt8]?) async throws -> [UInt8]?
+    func `echoMode`(_ argument0: `Mode`) async throws -> `Mode`
 }
 
 public extension `IEcho` {
@@ -29,6 +30,7 @@ public enum IEchoTransactionCode {
     public static let `echoOptionalText`: UInt32 = 8
     public static let `echoBytes`: UInt32 = 9
     public static let `echoOptionalBytes`: UInt32 = 10
+    public static let `echoMode`: UInt32 = 11
 }
 
 public struct IEchoProxy: `IEcho`, BinderProxy {
@@ -138,6 +140,16 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         try reader.readException()
         return try reader.readBytes()
     }
+
+    public func `echoMode`(_ argument0: `Mode`) async throws -> `Mode` {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        request.append(argument0.rawValue)
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoMode`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try `Mode`(rawValue: reader.readInt32())
+    }
 }
 
 open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
@@ -185,6 +197,10 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoOptionalBytes`(_ argument0: [UInt8]?) async throws -> [UInt8]? {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoOptionalBytes`)
+    }
+
+    open func `echoMode`(_ argument0: `Mode`) async throws -> `Mode` {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoMode`)
     }
 
     public override func onTransact(
@@ -270,6 +286,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`echoOptionalBytes`(argument0)
             reply.writeNoException()
             if let value = result { reply.append(bytes: value) } else { reply.appendNullBytes() }
+            return true
+        case IEchoTransactionCode.`echoMode`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try `Mode`(rawValue: data.readInt32())
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoMode`(argument0)
+            reply.writeNoException()
+            reply.append(result.rawValue)
             return true
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)
