@@ -8,6 +8,10 @@ public enum `Choice`: BinderParcelable {
     case `data`([UInt8]?)
     case `mode`(`Mode`)
 
+    public init() {
+        self = .`number`(0)
+    }
+
     public init(from reader: inout Parcel.Reader) throws {
         switch try reader.readInt32() {
         case 0:
