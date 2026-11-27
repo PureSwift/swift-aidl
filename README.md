@@ -42,6 +42,10 @@ Their `byte`, `int`, or `long` backing determines the wire encoding, and unknown
 raw values can round-trip through generated methods. Generate imported enums
 separately alongside their interfaces.
 
+AIDL unions with scalar fields generate Swift enums with associated values.
+The wire tag follows declaration order and only the active value is encoded.
+Generate imported unions separately alongside their interfaces.
+
 ### SwiftPM build tool plugin
 
 Add the `AIDLPlugin` plugin and the `Binder` product to the target that uses
