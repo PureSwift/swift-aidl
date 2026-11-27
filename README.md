@@ -55,6 +55,9 @@ raw values can round-trip through generated methods. Generate imported enums
 separately alongside their interfaces.
 Enum arrays use the backing type's array encoding, including packed bytes
 for byte-backed enums. Nullable enum arrays preserve a null array.
+Parcelable enum fields and union enum variants use the scalar backing encoding.
+Parcelable fields can default to a named enum member and otherwise start at
+raw value zero.
 
 AIDL unions with scalar, string, or byte-array fields generate Swift enums with
 associated values. String and byte-array variants can be nullable.
