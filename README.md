@@ -164,6 +164,13 @@ looks up `wifi` and `bluetooth_manager` and prints the raw states returned by
 interface definitions match the fetched AOSP sources. Use a shared AOSP tag
 or a per-project revision file when the image was built from pinned sources.
 
+With an AOSP `aidl` executable available, compare the smoke client's generated
+transaction IDs with that compiler for the same corpus:
+
+```sh
+AOSP_AIDL=/absolute/path/to/aidl swift test --filter comparesAOSPClientTransactions
+```
+
 ## AOSP parser corpus
 
 Run these commands from the repository root:
