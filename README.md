@@ -35,7 +35,8 @@ methods, and one-way calls. Interface methods also support `String` and
 `byte[]` and `@nullable byte[]` map to `[UInt8]` and `[UInt8]?`.
 Interface methods support arrays of all primitive types listed above,
 including nullable arrays.
-Two-way methods support non-nullable primitive arrays as `inout` parameters.
+Two-way methods support non-nullable primitive, string, enum, and parcelable
+arrays as `inout` parameters.
 Their lengths stay fixed for the call, and the caller receives updates after
 the reply has been decoded.
 `String[]` and `List<String>` map to `[String]`. Their `@nullable` forms
