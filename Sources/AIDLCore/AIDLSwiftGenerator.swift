@@ -457,7 +457,7 @@ struct AIDLSwiftGenerator {
     }
 
     private func parcelableFields(
-        _ parcelable: AIDLParcelable, declaredIn file: AIDLFile
+        _ parcelable: AIDLParcelable, declaredIn file: AIDLFile, ancestors: Set<String> = []
     ) throws -> [(name: String, field: ParcelableField, initialValue: String)] {
         let name = parcelable.name
         guard !parcelable.isOpaqueForwardDecl, parcelable.annotations.isEmpty,
@@ -465,8 +465,13 @@ struct AIDLSwiftGenerator {
               parcelable.nestedDeclarations.isEmpty else {
             throw failure("Swift generation requires a plain structured parcelable for '\(name)'")
         }
+        let qualifiedName = (file.packageName + [name]).joined(separator: ".")
+        var ancestry = ancestors
+        guard ancestry.insert(qualifiedName).inserted else {
+            throw failure("recursive Swift parcelable field involving '\(qualifiedName)'")
+        }
         let fields = try fields(parcelable.fields, in: name) { field, context in
-            let wire = try inlineField(field.type, in: file, owner: name, context: context)
+            let wire = try inlineField(field.type, in: file, owner: name, context: context, ancestors: ancestry)
             let initialValue = try field.defaultValue.map { tokens in
                 try parcelableDefault(tokens, for: wire, in: file, owner: name, fieldName: field.name, context: context)
             } ?? wire.initialValue
@@ -476,21 +481,39 @@ struct AIDLSwiftGenerator {
         return fields.map { ($0.name, $0.field.0, $0.field.1) }
     }
 
-    private func inlineField(_ type: AIDLType, in file: AIDLFile, owner: String, context: String) throws -> ParcelableField {
+    private func inlineField(
+        _ type: AIDLType, in file: AIDLFile, owner: String, context: String, ancestors: Set<String>? = nil
+    ) throws -> ParcelableField {
         let nullable = isNullableAnnotation(type.annotations)
         if let reference = referenceType(type), nullable || type.annotations.isEmpty {
             return .reference(reference, nullable: nullable)
         }
-        if isPlain(type), let qualifiedName = try? resolver.resolveName(type.name, in: file, scope: [owner]),
-           let symbol = resolver.symbols[qualifiedName], case let .enumeration(enumeration) = symbol.declaration {
-            let name = try identifier(enumeration.name)
-            guard name != owner,
-                  qualifiedName == (symbol.sourceFile.packageName + [name]).joined(separator: ".") else {
-                throw failure("unsupported Swift enum name '\(qualifiedName)' in \(context)")
+        if type.arrayDimensions == 0, type.typeArguments.isEmpty, type.annotations.isEmpty || nullable,
+           let qualifiedName = try? resolver.resolveName(type.name, in: file, scope: [owner]),
+           let symbol = resolver.symbols[qualifiedName] {
+            switch symbol.declaration {
+            case let .enumeration(enumeration) where !nullable:
+                let name = try inlineDeclarationName(symbol, owner: owner, context: context)
+                return .enumeration(name, qualifiedName: qualifiedName, backing: try enumBacking(enumeration))
+            case let .parcelable(parcelable):
+                if let ancestors {
+                    _ = try parcelableFields(parcelable, declaredIn: symbol.sourceFile, ancestors: ancestors)
+                    let name = try inlineDeclarationName(symbol, owner: owner, context: context)
+                    return .parcelable(name, qualifiedName: qualifiedName, nullable: nullable)
+                }
+            default:
+                break
             }
-            return .enumeration(name, qualifiedName: qualifiedName, backing: try enumBacking(enumeration))
         }
         return .scalar(try scalar(type, context: context))
+    }
+
+    private func inlineDeclarationName(_ symbol: AIDLSymbol, owner: String, context: String) throws -> String {
+        let name = try identifier(symbol.declaration.name)
+        guard name != owner, symbol.qualifiedName == (symbol.sourceFile.packageName + [name]).joined(separator: ".") else {
+            throw failure("unsupported Swift field type '\(symbol.qualifiedName)' in \(context)")
+        }
+        return name
     }
 
     private func parcelableDefault(
@@ -654,6 +677,24 @@ struct AIDLSwiftGenerator {
             "",
             "    public func write(to parcel: inout Parcel) throws {",
         ]
+        if fields.contains(where: { $0.field.isNestedParcelable }) {
+            lines += [
+                "        var payload = Parcel()",
+            ]
+            lines += fields.map { "        \($0.field.wireType.write("self." + $0.name, to: "payload"))" }
+            lines += [
+                "        guard payload.objectOffsets.isEmpty, payload.count.isMultiple(of: 4),",
+                "              payload.count <= Int32.max - 4 else { throw BinderError.failedTransaction }",
+                "        parcel.append(Int32(payload.count) + 4)",
+                "        payload.bytes.withUnsafeBytes { bytes in",
+                "            for offset in stride(from: 0, to: bytes.count, by: 4) {",
+                "                parcel.append(bitPattern: bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self))",
+                "            }",
+                "        }",
+                "    }",
+            ]
+            return lines + Self.typedObjectMethods + ["}"]
+        }
         let payloadSizes = fields.compactMap { $0.field.variablePayloadSize(of: "self." + $0.name) }
         if payloadSizes.isEmpty {
             lines.append("        parcel.append(Int32(\(wireSize)))")
@@ -861,6 +902,12 @@ struct AIDLSwiftGenerator {
         case scalar(Scalar)
         case reference(Reference, nullable: Bool)
         case enumeration(String, qualifiedName: String, backing: Scalar)
+        case parcelable(String, qualifiedName: String, nullable: Bool)
+
+        var isNestedParcelable: Bool {
+            if case .parcelable = self { return true }
+            return false
+        }
 
         var wireType: WireType {
             switch self {
@@ -868,6 +915,8 @@ struct AIDLSwiftGenerator {
             case let .reference(type, nullable): .reference(type, nullable: nullable)
             case let .enumeration(name, qualifiedName, backing):
                 .enumeration(name, qualifiedName: qualifiedName, backing: backing)
+            case let .parcelable(name, qualifiedName, nullable):
+                .parcelable(name, qualifiedName: qualifiedName, nullable: nullable)
             }
         }
 
@@ -878,6 +927,7 @@ struct AIDLSwiftGenerator {
             case .reference(.string, nullable: false): "\"\""
             case .reference(.bytes, nullable: false): "[]"
             case let .enumeration(name, _, _): "\(escaped(name))(rawValue: 0)"
+            case let .parcelable(name, _, nullable): nullable ? "nil" : "\(escaped(name))()"
             }
         }
 
@@ -887,6 +937,7 @@ struct AIDLSwiftGenerator {
             case let .scalar(type): type.wireSize
             case .reference: 4
             case let .enumeration(_, _, backing): backing.wireSize
+            case .parcelable: 0
             }
         }
 
