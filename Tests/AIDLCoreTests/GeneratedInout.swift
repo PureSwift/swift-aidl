@@ -5,6 +5,7 @@ public protocol `IInout`: BinderInterface {
     func `update`(_ argument0: inout [Int32], _ argument1: inout [UInt8]) async throws -> Int32
     func `updateObjects`(_ argument0: inout [String], _ argument1: inout [`Chunk`], _ argument2: inout [`Mode`]) async throws
     func `updateLists`(_ argument0: inout [String], _ argument1: inout [`Chunk`]) async throws
+    func `fillLists`(_ argument0: inout [String], _ argument1: inout [`Chunk`]) async throws -> Int32
 }
 
 public extension `IInout` {
@@ -15,6 +16,7 @@ public enum IInoutTransactionCode {
     public static let `update`: UInt32 = 1
     public static let `updateObjects`: UInt32 = 2
     public static let `updateLists`: UInt32 = 3
+    public static let `fillLists`: UInt32 = 4
 }
 
 public struct IInoutProxy: `IInout`, BinderProxy {
@@ -91,6 +93,20 @@ public struct IInoutProxy: `IInout`, BinderProxy {
         argument0 = updated0
         argument1 = updated1
     }
+
+    public func `fillLists`(_ argument0: inout [String], _ argument1: inout [`Chunk`]) async throws -> Int32 {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        let reply = try await remote.transact(code: IInoutTransactionCode.`fillLists`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        let result = try reader.readInt32()
+        guard let updated0 = try IInoutArrayCodec.read(from: &reader, elementSize: 4, readElement: IInoutArrayCodec.readRequiredString) else { throw ParcelError.invalidLength(-1) }
+        guard let updated1 = try IInoutArrayCodec.read(from: &reader, elementSize: 4, readElement: `Chunk`.readTypedObject) else { throw ParcelError.invalidLength(-1) }
+        argument0 = updated0
+        argument1 = updated1
+        return result
+    }
 }
 
 open class IInoutStub: BinderStub, `IInout`, @unchecked Sendable {
@@ -110,6 +126,10 @@ open class IInoutStub: BinderStub, `IInout`, @unchecked Sendable {
 
     open func `updateLists`(_ argument0: inout [String], _ argument1: inout [`Chunk`]) async throws {
         throw BinderTransactionError.unknownTransaction(IInoutTransactionCode.`updateLists`)
+    }
+
+    open func `fillLists`(_ argument0: inout [String], _ argument1: inout [`Chunk`]) async throws -> Int32 {
+        throw BinderTransactionError.unknownTransaction(IInoutTransactionCode.`fillLists`)
     }
 
     public override func onTransact(
@@ -156,6 +176,17 @@ open class IInoutStub: BinderStub, `IInout`, @unchecked Sendable {
             guard data.isAtEnd else { throw BinderError.failedTransaction }
             try await self.`updateLists`(&argument0, &argument1)
             reply.writeNoException()
+            try IInoutArrayCodec.write(argument0, to: &reply) { $1.append($0) }
+            try IInoutArrayCodec.write(argument1, to: &reply) { try $0.writeTypedObject(to: &$1) }
+            return true
+        case IInoutTransactionCode.`fillLists`:
+            try data.enforceInterface(Self.descriptor)
+            var argument0: [String] = []
+            var argument1: [`Chunk`] = []
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`fillLists`(&argument0, &argument1)
+            reply.writeNoException()
+            reply.append(result)
             try IInoutArrayCodec.write(argument0, to: &reply) { $1.append($0) }
             try IInoutArrayCodec.write(argument1, to: &reply) { try $0.writeTypedObject(to: &$1) }
             return true
