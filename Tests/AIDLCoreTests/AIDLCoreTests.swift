@@ -12,6 +12,8 @@ import Testing
     "interface Example { void first(inout @nullable String[] values); }",
     "oneway interface Example { int first(); }",
     "interface Example { @nullable int first(); }",
+    #"interface Example { @EnforcePermission("INTERNET") void first(); }"#,
+    "interface Example { @utf8InCpp int first(); }",
     "interface Example { @nullable void first(); }",
     "parcelable Example { byte value = 128; }",
     "parcelable Example { @nullable Example child; }",
