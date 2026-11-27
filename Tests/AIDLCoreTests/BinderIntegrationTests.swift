@@ -3,6 +3,43 @@ import Binder
 import Foundation
 import Testing
 
+@Test func generatedJavaAnnotationsPreserveTransactionOrderAndStringEncoding() async throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try """
+        package demo;
+        @JavaPassthrough(annotation="@Deprecated")
+        interface IAnnotated {
+            @UnsupportedAppUsage
+            int legacy();
+            @JavaPassthrough(annotation="@Deprecated")
+            @nullable @utf8InCpp String label(in @nullable @utf8InCpp String input);
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedAnnotated.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+    #expect(IAnnotatedTransactionCode.legacy == 1)
+    #expect(IAnnotatedTransactionCode.label == 2)
+
+    let stub = AnnotatedService()
+    let proxy = IAnnotatedProxy(remote: stub)
+    #expect(try await proxy.legacy() == 7)
+    #expect(try await proxy.label("A😀") == "A😀")
+    #expect(try await proxy.label(nil) == nil)
+    var request = Parcel()
+    request.appendInterfaceToken(IAnnotatedProxy.descriptor)
+    request.append("A😀")
+    let reply = try await stub.transact(code: IAnnotatedTransactionCode.label, data: request, flags: [])
+    #expect(reply.bytes == [0, 0, 0, 0, 3, 0, 0, 0, 65, 0, 61, 216, 0, 222, 0, 0])
+}
+
+private final class AnnotatedService: IAnnotatedStub, @unchecked Sendable {
+    override func legacy() async throws -> Int32 { 7 }
+
+    override func label(_ input: String?) async throws -> String? { input }
+}
+
 @Test func generatedStringMapsUseCountAndStringPairs() async throws {
     let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
     try """
