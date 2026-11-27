@@ -26,12 +26,19 @@ extension AIDLSwift {
         @Option(name: .shortAndLong, help: "Write the Swift source to this file. Defaults to standard output.")
         var output: String?
 
+        @Option(help: "Emit the Stable AIDL interface-version transaction with this positive version.")
+        var interfaceVersion: Int32?
+
+        @Option(help: "Emit the Stable AIDL interface-hash transaction with this hash.")
+        var interfaceHash: String?
+
         @Argument(help: "The root AIDL source file.")
         var sourcePath: String
 
         func run() throws {
             let source = try AIDLCompiler().compile(
-                sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths
+                sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths,
+                interfaceVersion: interfaceVersion, interfaceHash: interfaceHash
             )
             if let output {
                 try source.write(toFile: output, atomically: true, encoding: .utf8)
