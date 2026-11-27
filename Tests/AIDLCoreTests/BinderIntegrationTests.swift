@@ -69,6 +69,7 @@ import Testing
     }
 
     let stub = EchoService()
+    let _: (RemoteProxy) -> IEchoProxy = IEchoProxy.init(remote:)
     let proxy = IEchoProxy(remote: stub.asBinder())
     #expect(IEchoTransactionCode.echo == 1)
     #expect(IEchoTransactionCode.notify == 2)
