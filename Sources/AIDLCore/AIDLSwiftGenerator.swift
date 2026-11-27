@@ -61,16 +61,8 @@ struct AIDLSwiftGenerator {
             methods.append(method)
         }
         let constants = try generateInterfaceConstants(interface, methodNames: Set(methods.map(\.name)))
-        var declarationNames: [String: String] = [:]
-        for method in methods {
-            let types = method.parameters + (method.result.map { [$0] } ?? [])
-            for type in types {
-                guard let (name, qualifiedName) = type.declarationIdentity else { continue }
-                if let existing = declarationNames.updateValue(qualifiedName, forKey: name), existing != qualifiedName {
-                    throw failure("'\(existing)' and '\(qualifiedName)' share the Swift name '\(name)'")
-                }
-            }
-        }
+        let methodTypes = methods.flatMap { $0.parameters + ($0.result.map { [$0] } ?? []) }
+        try validateSwiftTypeNames(methodTypes)
 
         var lines = ["public protocol \(escaped(name)): BinderInterface {"]
         lines += methods.map { "    \($0.signature)" }
@@ -153,7 +145,6 @@ struct AIDLSwiftGenerator {
             "    }",
             "}",
         ]
-        let methodTypes = methods.flatMap { $0.parameters + ($0.result.map { [$0] } ?? []) }
         if methodTypes.contains(where: \.usesArrayCodec) {
             let requiresStringReader = methodTypes.contains {
                 if case .stringCollection(_, nullable: false) = $0 { return true }
@@ -353,8 +344,9 @@ struct AIDLSwiftGenerator {
                 return .stringCollection(codec: codec, nullable: nullable)
             }
             if let name = try? resolver.resolveName(elementName, in: file, scope: [file.declarations[0].name]),
-               let declaration = resolver.symbols[name]?.declaration {
-                if try validateTypedObject(declaration) {
+               let symbol = resolver.symbols[name] {
+                let declaration = symbol.declaration
+                if try validateTypedObject(symbol) {
                     let swiftName = try swiftDeclarationName(declaration, qualifiedName: name, context: context)
                     return .parcelableCollection(swiftName, qualifiedName: name, codec: codec, nullable: nullable)
                 }
@@ -373,9 +365,10 @@ struct AIDLSwiftGenerator {
         if type.arrayDimensions == 0, type.typeArguments.isEmpty, annotations.isEmpty || nullable {
             if annotations.isEmpty, let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
             let resolved = try resolver.resolve(type, in: file, scope: [file.declarations[0].name])
-            if case let .declaration(name) = resolved.target, let declaration = resolver.symbols[name]?.declaration {
+            if case let .declaration(name) = resolved.target, let symbol = resolver.symbols[name] {
+                let declaration = symbol.declaration
                 let swiftName = try swiftDeclarationName(declaration, qualifiedName: name, context: context)
-                if try validateTypedObject(declaration) {
+                if try validateTypedObject(symbol) {
                     return .parcelable(swiftName, qualifiedName: name, nullable: nullable)
                 }
                 if case let .enumeration(enumeration) = declaration, !nullable {
@@ -403,12 +396,12 @@ struct AIDLSwiftGenerator {
         return name
     }
 
-    private func validateTypedObject(_ declaration: AIDLDeclaration) throws -> Bool {
-        switch declaration {
+    private func validateTypedObject(_ symbol: AIDLSymbol) throws -> Bool {
+        switch symbol.declaration {
         case let .parcelable(parcelable):
-            _ = try parcelableFields(parcelable)
+            _ = try parcelableFields(parcelable, declaredIn: symbol.sourceFile)
         case let .union(union):
-            _ = try unionFields(union)
+            _ = try unionFields(union, declaredIn: symbol.sourceFile)
         default:
             return false
         }
@@ -463,7 +456,9 @@ struct AIDLSwiftGenerator {
         annotations.count == 1 && annotations[0].name == "nullable" && annotations[0].arguments.isEmpty
     }
 
-    private func parcelableFields(_ parcelable: AIDLParcelable) throws -> [(name: String, field: ParcelableField, initialValue: String)] {
+    private func parcelableFields(
+        _ parcelable: AIDLParcelable, declaredIn file: AIDLFile
+    ) throws -> [(name: String, field: ParcelableField, initialValue: String)] {
         let name = parcelable.name
         guard !parcelable.isOpaqueForwardDecl, parcelable.annotations.isEmpty,
               parcelable.typeParameters.isEmpty, parcelable.constants.isEmpty,
@@ -471,25 +466,36 @@ struct AIDLSwiftGenerator {
             throw failure("Swift generation requires a plain structured parcelable for '\(name)'")
         }
         let fields = try fields(parcelable.fields, in: name) { field, context in
-            let wire = try inlineField(field.type, context: context)
+            let wire = try inlineField(field.type, in: file, owner: name, context: context)
             let initialValue = try field.defaultValue.map { tokens in
-                try parcelableDefault(tokens, for: wire, fieldName: field.name, context: context)
+                try parcelableDefault(tokens, for: wire, in: file, owner: name, fieldName: field.name, context: context)
             } ?? wire.initialValue
             return (wire, initialValue)
         }
+        try validateSwiftTypeNames(fields.map { $0.field.0.wireType })
         return fields.map { ($0.name, $0.field.0, $0.field.1) }
     }
 
-    private func inlineField(_ type: AIDLType, context: String) throws -> ParcelableField {
+    private func inlineField(_ type: AIDLType, in file: AIDLFile, owner: String, context: String) throws -> ParcelableField {
         let nullable = isNullableAnnotation(type.annotations)
         if let reference = referenceType(type), nullable || type.annotations.isEmpty {
             return .reference(reference, nullable: nullable)
+        }
+        if isPlain(type), let qualifiedName = try? resolver.resolveName(type.name, in: file, scope: [owner]),
+           let symbol = resolver.symbols[qualifiedName], case let .enumeration(enumeration) = symbol.declaration {
+            let name = try identifier(enumeration.name)
+            guard name != owner,
+                  qualifiedName == (symbol.sourceFile.packageName + [name]).joined(separator: ".") else {
+                throw failure("unsupported Swift enum name '\(qualifiedName)' in \(context)")
+            }
+            return .enumeration(name, qualifiedName: qualifiedName, backing: try enumBacking(enumeration))
         }
         return .scalar(try scalar(type, context: context))
     }
 
     private func parcelableDefault(
-        _ tokens: [AIDLToken], for field: ParcelableField, fieldName: String, context: String
+        _ tokens: [AIDLToken], for field: ParcelableField, in file: AIDLFile, owner: String,
+        fieldName: String, context: String
     ) throws -> String {
         switch field {
         case let .scalar(type):
@@ -507,21 +513,46 @@ struct AIDLSwiftGenerator {
         case .reference(.string, _):
             var evaluator = StringConstantEvaluator(definitions: [fieldName: tokens], interfaceDescriptor: "")
             return String(reflecting: try evaluator.evaluate(fieldName))
+        case let .enumeration(name, qualifiedName, _):
+            let parts = tokens.enumerated()
+            guard tokens.count >= 3, tokens.count.isMultiple(of: 2) == false,
+                  parts.allSatisfy({ $0.offset.isMultiple(of: 2) ? $0.element.kind == .identifier : $0.element.text == "." }),
+                  let member = tokens.last?.text else {
+                throw failure("expected a qualified enum member default for \(context)")
+            }
+            let enumName = tokens.dropLast(2).map(\.text).joined()
+            guard (try? resolver.resolveName(enumName, in: file, scope: [owner])) == qualifiedName,
+                  integerConstants[qualifiedName + "." + member] != nil else {
+                throw failure("default for \(context) must reference a member of '\(qualifiedName)'")
+            }
+            return "\(escaped(name)).\(escaped(member))"
         default:
             break
         }
         throw failure("unsupported explicit default for \(context)")
     }
 
-    private func unionFields(_ union: AIDLUnion) throws -> [(name: String, field: WireType)] {
+    private func unionFields(_ union: AIDLUnion, declaredIn file: AIDLFile) throws -> [(name: String, field: WireType)] {
         guard union.annotations.isEmpty, union.constants.isEmpty, union.nestedDeclarations.isEmpty, !union.fields.isEmpty else {
             throw failure("Swift generation requires a plain union with at least one field for '\(union.name)'")
         }
-        return try fields(union.fields, in: union.name) { field, context in
+        let fields = try fields(union.fields, in: union.name) { field, context in
             guard field.defaultValue == nil else {
                 throw failure("Swift generation does not support an explicit default for \(context)")
             }
-            return try inlineField(field.type, context: context).wireType
+            return try inlineField(field.type, in: file, owner: union.name, context: context).wireType
+        }
+        try validateSwiftTypeNames(fields.map(\.field))
+        return fields
+    }
+
+    private func validateSwiftTypeNames(_ types: [WireType]) throws {
+        var names: [String: String] = [:]
+        for type in types {
+            guard let (name, qualifiedName) = type.declarationIdentity else { continue }
+            if let existing = names.updateValue(qualifiedName, forKey: name), existing != qualifiedName {
+                throw failure("'\(existing)' and '\(qualifiedName)' share the Swift name '\(name)'")
+            }
         }
     }
 
@@ -542,7 +573,7 @@ struct AIDLSwiftGenerator {
 
     private func generateUnion(_ union: AIDLUnion) throws -> [String] {
         let name = escaped(try identifier(union.name))
-        let fields = try unionFields(union)
+        let fields = try unionFields(union, declaredIn: file)
         var lines = ["public enum \(name): BinderParcelable {"]
         lines += fields.map { "    case \($0.name)(\($0.field.swiftType))" }
         lines += [
@@ -581,7 +612,7 @@ struct AIDLSwiftGenerator {
 
     private func generateParcelable(_ parcelable: AIDLParcelable) throws -> [String] {
         let name = escaped(try identifier(parcelable.name))
-        let fields = try parcelableFields(parcelable)
+        let fields = try parcelableFields(parcelable, declaredIn: file)
         let size = fields.reduce(4) { $0 + $1.field.fixedWireSize }
         guard let wireSize = Int32(exactly: size) else {
             throw failure("parcelable '\(parcelable.name)' exceeds the size of a Binder parcel")
@@ -829,11 +860,14 @@ struct AIDLSwiftGenerator {
     private enum ParcelableField {
         case scalar(Scalar)
         case reference(Reference, nullable: Bool)
+        case enumeration(String, qualifiedName: String, backing: Scalar)
 
         var wireType: WireType {
             switch self {
             case let .scalar(type): .scalar(type)
             case let .reference(type, nullable): .reference(type, nullable: nullable)
+            case let .enumeration(name, qualifiedName, backing):
+                .enumeration(name, qualifiedName: qualifiedName, backing: backing)
             }
         }
 
@@ -843,6 +877,7 @@ struct AIDLSwiftGenerator {
             case .reference(_, nullable: true): "nil"
             case .reference(.string, nullable: false): "\"\""
             case .reference(.bytes, nullable: false): "[]"
+            case let .enumeration(name, _, _): "\(escaped(name))(rawValue: 0)"
             }
         }
 
@@ -851,6 +886,7 @@ struct AIDLSwiftGenerator {
             switch self {
             case let .scalar(type): type.wireSize
             case .reference: 4
+            case let .enumeration(_, _, backing): backing.wireSize
             }
         }
 
