@@ -4,17 +4,27 @@ import Foundation
 import Testing
 
 @Test func generatedInoutArraysUpdateOnlyAfterValidReply() async throws {
-    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let package = root.appendingPathComponent("demo", isDirectory: true)
+    try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let path = package.appendingPathComponent("IInout.aidl")
     try """
         package demo;
+        import demo.Chunk;
+        import demo.Mode;
         interface IInout {
             int update(inout int[] values, inout byte[] bytes);
+            void updateObjects(inout String[] labels, inout Chunk[] chunks, inout Mode[] modes);
         }
         """.write(to: path, atomically: true, encoding: .utf8)
-    defer { try? FileManager.default.removeItem(at: path) }
+    try "package demo; parcelable Chunk { int id; long count; boolean complete; }"
+        .write(to: package.appendingPathComponent("Chunk.aidl"), atomically: true, encoding: .utf8)
+    try #"package demo; @Backing(type="int") enum Mode { IDLE, RUNNING = 4, STOPPING }"#
+        .write(to: package.appendingPathComponent("Mode.aidl"), atomically: true, encoding: .utf8)
     let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         .appendingPathComponent("GeneratedInout.swift")
-    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+    #expect(try AIDLCompiler().compile(sourcePath: path.path, includePaths: [root.path]) == String(contentsOf: fixture, encoding: .utf8))
 
     var values: [Int32] = [7, 2]
     var bytes: [UInt8] = [0, 255]
@@ -22,6 +32,15 @@ import Testing
     #expect(try await proxy.update(&values, &bytes) == 42)
     #expect(values == [2, 7])
     #expect(bytes == [255, 0])
+
+    var labels = ["A😀", ""]
+    var chunks = [Chunk(id: 1), Chunk(id: 2)]
+    let unknownMode = Mode(rawValue: .max)
+    var modes = [Mode.RUNNING, unknownMode]
+    try await proxy.updateObjects(&labels, &chunks, &modes)
+    #expect(labels == ["", "A😀"])
+    #expect(chunks.map(\.id) == [2, 1])
+    #expect(modes == [unknownMode, .RUNNING])
 
     let malformed = IInoutProxy(remote: InvalidInoutReply())
     await #expect(throws: BinderError.failedTransaction) {
@@ -51,6 +70,12 @@ private final class InoutService: IInoutStub, @unchecked Sendable {
         values.reverse()
         bytes.reverse()
         return 42
+    }
+
+    override func updateObjects(_ labels: inout [String], _ chunks: inout [Chunk], _ modes: inout [Mode]) async throws {
+        labels.reverse()
+        chunks.reverse()
+        modes.reverse()
     }
 }
 
