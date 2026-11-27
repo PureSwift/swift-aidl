@@ -49,6 +49,11 @@ separately, passing the import root with `-I`. Use `@nullable` on a parcelable
 input or result to generate an optional Swift value. Compile both outputs in a target
 that depends on `Binder` 0.2.1.
 
+Structured parcelables can contain other generated parcelables. Nullable
+children default to `nil` and required children default to an initialized
+value. Generate each referenced parcelable separately. Recursive parcelable
+fields are unsupported.
+
 AIDL enums generate `RawRepresentable` Swift structs with named static values.
 Their `byte`, `int`, or `long` backing determines the wire encoding, and unknown
 raw values can round-trip through generated methods. Generate imported enums
