@@ -79,6 +79,26 @@ import Testing
             Mode mode;
         }
         """.write(to: choice, atomically: true, encoding: .utf8)
+    let containerChoice = package.appendingPathComponent("ContainerChoice.aidl")
+    try """
+        package demo;
+        import demo.Chunk;
+        import demo.Choice;
+        union ContainerChoice {
+            int number;
+            @nullable Chunk chunk;
+            Choice choice;
+        }
+        """.write(to: containerChoice, atomically: true, encoding: .utf8)
+    let unionEnvelope = package.appendingPathComponent("UnionEnvelope.aidl")
+    try """
+        package demo;
+        import demo.ContainerChoice;
+        parcelable UnionEnvelope {
+            ContainerChoice choice;
+            @nullable ContainerChoice optionalChoice;
+        }
+        """.write(to: unionEnvelope, atomically: true, encoding: .utf8)
     let byteMode = package.appendingPathComponent("ByteMode.aidl")
     try """
         package demo;
@@ -117,6 +137,8 @@ import Testing
         (chunk, "GeneratedChunk.swift"),
         (mode, "GeneratedMode.swift"),
         (choice, "GeneratedChoice.swift"),
+        (containerChoice, "GeneratedContainerChoice.swift"),
+        (unionEnvelope, "GeneratedUnionEnvelope.swift"),
         (byteMode, "GeneratedByteMode.swift"),
         (enumFields, "GeneratedEnumFields.swift"),
         (nested, "GeneratedNested.swift"),
@@ -312,6 +334,35 @@ import Testing
     #expect(throws: ParcelError.invalidLength(-1)) {
         try Choice(from: &invalidTextReader)
     }
+}
+
+@Test func generatedNestedUnionsPreserveTagsAndPresenceMarkers() throws {
+    var parcel = Parcel()
+    try UnionEnvelope(choice: .choice(.big(42)), optionalChoice: .chunk(nil)).write(to: &parcel)
+    #expect(parcel.bytes == [
+        40, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0,
+        1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0,
+        1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+    ])
+    var reader = parcel.reader()
+    let decoded = try UnionEnvelope(from: &reader)
+    guard case let .choice(.big(value)) = decoded.choice,
+          case .some(.chunk(nil)) = decoded.optionalChoice else {
+        Issue.record("Expected the original nested variants")
+        return
+    }
+    #expect(value == 42)
+    #expect(reader.isAtEnd)
+
+    var older = Parcel()
+    older.append(Int32(4))
+    var oldReader = older.reader()
+    let defaults = try UnionEnvelope(from: &oldReader)
+    guard case let .number(number) = defaults.choice else {
+        Issue.record("Expected the first union variant")
+        return
+    }
+    #expect(number == 0 && defaults.optionalChoice == nil)
 }
 
 @Test func generatedEnumFieldsUseBackingAndDeclaredDefaults() throws {
