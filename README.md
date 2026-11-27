@@ -32,6 +32,9 @@ It supports scalar input parameters and return values
 (`byte`, `int`, `long`, `boolean`, `char`, `float`, and `double`), `void`
 methods, and one-way calls. Interface methods also support `String` and
 `@nullable String` inputs and results using Binder's UTF-16 string encoding.
+The generator preserves method order with Java source annotations such as
+`@JavaPassthrough` and `@UnsupportedAppUsage`. Strings marked `@utf8InCpp`
+still use UTF-16 on the wire.
 `byte[]` and `@nullable byte[]` map to `[UInt8]` and `[UInt8]?`.
 Interface methods support arrays of all primitive types listed above,
 including nullable arrays.
