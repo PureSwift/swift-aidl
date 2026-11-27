@@ -34,9 +34,10 @@ methods, and one-way calls. Interface methods also support `String` and
 `@nullable String` inputs and results using Binder's UTF-16 string encoding.
 `byte[]` and `@nullable byte[]` map to `[UInt8]` and `[UInt8]?`.
 The generator emits `BinderParcelable` structs for
-structured parcelables with scalar, string, and byte-array fields and implicit
-defaults. Missing trailing string and byte-array fields decode as empty values
-or `nil` when nullable. For a method
+structured parcelables with scalar, string, and byte-array fields. It supports
+explicit defaults for integer and string expressions without named references,
+and for boolean literals. Missing trailing fields use the same defaults as the
+generated initializer. For a method
 that takes or returns a parcelable, generate the interface and the parcelable
 separately, passing the import root with `-I`. Use `@nullable` on a parcelable
 input or result to generate an optional Swift value. Compile both outputs in a target
