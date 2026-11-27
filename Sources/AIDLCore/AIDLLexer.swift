@@ -65,7 +65,7 @@ public struct AIDLLexer {
             } else if character == "\"" || character == "'" {
                 try consumeQuoted(character, start: start)
                 kind = character == "\"" ? .stringLiteral : .characterLiteral
-            } else if "{}()[]<>;,=.?:+-*/|&^~@".contains(character) {
+            } else if "{}()[]<>;,=.?:+-*/%|&^~@".contains(character) {
                 advance()
                 if (character == "<" || character == ">") && peek() == character { advance() }
                 kind = .symbol
@@ -142,14 +142,14 @@ public struct AIDLLexer {
         if peek() == "0", let prefix = peek(1), "xXbB".contains(prefix) {
             advance(); advance()
             let digitsStart = index
-            while let c = peek(), ("bB".contains(prefix) ? (c == "0" || c == "1") : (isDigit(c) || "abcdefABCDEF".contains(c))) { advance() }
+            while let c = peek(), c == "_" || ("bB".contains(prefix) ? (c == "0" || c == "1") : (isDigit(c) || "abcdefABCDEF".contains(c))) { advance() }
             guard index > digitsStart else { throw error("expected digits after numeric prefix", at: start) }
             if "bB".contains(prefix), let c = peek(), isDigit(c) { throw error("invalid binary digit", at: location) }
-            if let c = peek(), "lL".contains(c) { advance() }
+            consumeIntegerSuffix()
             return .integerLiteral
         }
         var floating = false
-        while let c = peek(), isDigit(c) { advance() }
+        while let c = peek(), isDigit(c) || c == "_" { advance() }
         if peek() == "." {
             floating = true; advance()
             while let c = peek(), isDigit(c) { advance() }
@@ -162,7 +162,16 @@ public struct AIDLLexer {
             guard index > digitsStart else { throw error("expected exponent digits", at: start) }
         }
         if let suffix = peek(), "fFdD".contains(suffix) { floating = true; advance() }
-        else if !floating, let suffix = peek(), "lL".contains(suffix) { advance() }
+        else if !floating { consumeIntegerSuffix() }
         return floating ? .floatingPointLiteral : .integerLiteral
+    }
+
+    private mutating func consumeIntegerSuffix() {
+        for suffix in ["u32", "u64", "u8", "l", "L"] {
+            if suffix.enumerated().allSatisfy({ peek($0.offset) == $0.element }) {
+                for _ in suffix { advance() }
+                return
+            }
+        }
     }
 }
