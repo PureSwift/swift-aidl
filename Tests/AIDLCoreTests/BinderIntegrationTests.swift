@@ -7,6 +7,7 @@ import Testing
     let source = """
         package demo;
         import demo.Chunk;
+        import demo.ManualStamp;
         import demo.EnumFields;
         import demo.Nested;
         import demo.Choice;
@@ -44,6 +45,8 @@ import Testing
             ByteMode[] echoByteModes(in ByteMode[] value);
             EnumFields echoEnumFields(in EnumFields value);
             Nested echoNested(in Nested value);
+            ManualStamp echoStamp(in ManualStamp value);
+            @nullable ManualStamp echoOptionalStamp(in @nullable ManualStamp value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -52,6 +55,8 @@ import Testing
     defer { try? FileManager.default.removeItem(at: directory) }
     let input = package.appendingPathComponent("IEcho.aidl")
     try source.write(to: input, atomically: true, encoding: .utf8)
+    let manual = package.appendingPathComponent("ManualStamp.aidl")
+    try "package demo; parcelable ManualStamp;".write(to: manual, atomically: true, encoding: .utf8)
     let chunk = package.appendingPathComponent("Chunk.aidl")
     try """
         package demo;
@@ -160,11 +165,23 @@ import Testing
         let emitted = try compiler.compile(
             sourcePath: source.path, includePaths: [directory.path],
             interfaceVersion: source == input ? 3 : nil,
-            interfaceHash: source == input ? "notfrozen" : nil
+            interfaceHash: source == input ? "notfrozen" : nil,
+            manualParcelables: ["demo.ManualStamp"]
         )
         let fixture = fixtures.appendingPathComponent(fixtureName)
         #expect(emitted == (try String(contentsOf: fixture, encoding: .utf8)))
     }
+    #expect(throws: AIDLSwiftGenerationError.self) {
+        try compiler.compile(sourcePath: input.path, includePaths: [directory.path])
+    }
+    try FileManager.default.removeItem(at: manual)
+    let framework = directory.appendingPathComponent("framework.aidl")
+    try "parcelable demo.ManualStamp;".write(to: framework, atomically: true, encoding: .utf8)
+    let withPreprocessed = try compiler.compile(
+        sourcePath: input.path, includePaths: [directory.path], preprocessedPaths: [framework.path],
+        interfaceVersion: 3, interfaceHash: "notfrozen", manualParcelables: ["demo.ManualStamp"]
+    )
+    #expect(withPreprocessed == (try String(contentsOf: fixtures.appendingPathComponent("GeneratedEcho.swift"), encoding: .utf8)))
 
     let stub = EchoService()
     let _: (RemoteProxy) -> IEchoProxy = IEchoProxy.init(remote:)
@@ -273,6 +290,10 @@ import Testing
     #expect(nestedResult.payload?.data == [255])
     #expect(nestedResult.child.id == 42 && nestedResult.child.count == .min && nestedResult.tail == 17)
     #expect(try await proxy.echoNested(Nested()).payload == nil)
+    let stamp = ManualStamp(serial: .min, enabled: true)
+    #expect(try await proxy.echoStamp(stamp) == stamp)
+    #expect(try await proxy.echoOptionalStamp(stamp) == stamp)
+    #expect(try await proxy.echoOptionalStamp(nil) == nil)
 
     var byteModes = Parcel()
     byteModes.appendInterfaceToken(IEchoProxy.descriptor)
@@ -330,6 +351,25 @@ import Testing
     }
 }
 
+public struct ManualStamp: BinderParcelable, Equatable {
+    let serial: Int64
+    let enabled: Bool
+
+    init(serial: Int64, enabled: Bool) {
+        self.serial = serial
+        self.enabled = enabled
+    }
+
+    public init(from reader: inout Parcel.Reader) throws {
+        serial = try reader.readInt64()
+        enabled = try reader.readBool()
+    }
+
+    public func write(to parcel: inout Parcel) throws {
+        parcel.append(serial)
+        parcel.append(enabled)
+    }
+}
 @Test func generatedUnionUsesDeclaredTagAndActivePayload() throws {
     var parcel = Parcel()
     try Choice.big(42).writeTypedObject(to: &parcel)
@@ -717,4 +757,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoEnumFields(_ value: EnumFields) async throws -> EnumFields { value }
 
     override func echoNested(_ value: Nested) async throws -> Nested { value }
+
+    override func echoStamp(_ value: ManualStamp) async throws -> ManualStamp { value }
+
+    override func echoOptionalStamp(_ value: ManualStamp?) async throws -> ManualStamp? { value }
 }
