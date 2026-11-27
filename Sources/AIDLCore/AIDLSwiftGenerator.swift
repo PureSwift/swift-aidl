@@ -158,17 +158,30 @@ struct AIDLSwiftGenerator {
 
     private func generateInterfaceConstants(_ interface: AIDLInterface, methodNames: Set<String>) throws -> [String] {
         var names = methodNames
-        return try interface.constants.map { constant in
+        let declarations = try interface.constants.map { constant in
             let qualifiedName = interface.descriptor + "." + constant.name
             let name = try identifier(constant.name)
             guard names.insert(name).inserted else {
                 throw failure("conflicting Swift name for interface constant '\(qualifiedName)'")
             }
-            guard isPlain(constant.type), let backing = AIDLIntegerBacking(rawValue: constant.type.name),
-                  let type = Scalar(rawValue: backing.rawValue), let value = integerConstants[qualifiedName] else {
-                throw failure("unsupported Swift type '\(constant.type.name)' for interface constant '\(qualifiedName)'")
+            return constant
+        }
+        let strings = Dictionary(uniqueKeysWithValues: declarations
+            .filter { $0.type.name == "String" && isPlain($0.type) }
+            .map { ($0.name, $0.value) })
+        var evaluator = StringConstantEvaluator(definitions: strings, interfaceDescriptor: interface.descriptor)
+        return try declarations.map { constant in
+            let qualifiedName = interface.descriptor + "." + constant.name
+            let name = escaped(constant.name)
+            if strings[constant.name] != nil {
+                let value = try evaluator.evaluate(constant.name)
+                return "    static var \(name): String { \(String(reflecting: value)) }"
             }
-            return "    static var \(escaped(name)): \(type.swiftType) { \(value) }"
+            if isPlain(constant.type), let type = Scalar(rawValue: constant.type.name),
+               let value = integerConstants[qualifiedName] {
+                return "    static var \(name): \(type.swiftType) { \(value) }"
+            }
+            throw failure("unsupported Swift type '\(constant.type.name)' for interface constant '\(qualifiedName)'")
         }
     }
 
@@ -644,6 +657,84 @@ struct AIDLSwiftGenerator {
             }
         }
     }
+}
+
+private struct StringConstantEvaluator {
+    let definitions: [String: [AIDLToken]]
+    let interfaceDescriptor: String
+    private var values: [String: String] = [:]
+    private var active: Set<String> = []
+
+    init(definitions: [String: [AIDLToken]], interfaceDescriptor: String) {
+        self.definitions = definitions
+        self.interfaceDescriptor = interfaceDescriptor
+    }
+
+    mutating func evaluate(_ name: String) throws -> String {
+        if let value = values[name] { return value }
+        guard let tokens = definitions[name], active.insert(name).inserted else {
+            throw AIDLConstantEvaluationError(message: "unknown or cyclic String constant '\(name)'", location: definitions[name]?.first?.location)
+        }
+        defer { active.remove(name) }
+        var index = 0
+        let value = try concatenate(tokens, index: &index)
+        guard index == tokens.count else {
+            throw AIDLConstantEvaluationError(message: "expected '+' in String constant '\(name)'", location: tokens[index].location)
+        }
+        values[name] = value
+        return value
+    }
+
+    private mutating func concatenate(_ tokens: [AIDLToken], index: inout Int) throws -> String {
+        var value = try term(tokens, index: &index)
+        while index < tokens.count, tokens[index].text == "+" {
+            index += 1
+            value += try term(tokens, index: &index)
+        }
+        return value
+    }
+
+    private mutating func term(_ tokens: [AIDLToken], index: inout Int) throws -> String {
+        guard index < tokens.count else {
+            throw AIDLConstantEvaluationError(message: "expected a String constant operand", location: tokens.last?.location)
+        }
+        let token = tokens[index]
+        index += 1
+        if token.kind == .stringLiteral {
+            let contents = token.text.dropFirst().dropLast()
+            guard contents.utf8.allSatisfy({ (0x20...0x7e).contains($0) && $0 != 0x5c }) else {
+                throw AIDLConstantEvaluationError(message: "AIDL String literals require printable ASCII without backslashes", location: token.location)
+            }
+            return String(contents)
+        }
+        if token.text == "(" {
+            let value = try concatenate(tokens, index: &index)
+            guard index < tokens.count, tokens[index].text == ")" else {
+                throw AIDLConstantEvaluationError(message: "expected ')' in String constant", location: token.location)
+            }
+            index += 1
+            return value
+        }
+        guard token.kind == .identifier else {
+            throw AIDLConstantEvaluationError(message: "expected a String literal or constant name", location: token.location)
+        }
+        var reference = token.text
+        while index + 1 < tokens.count,
+              tokens[index].text == ".", tokens[index + 1].kind == .identifier {
+            reference += "." + tokens[index + 1].text
+            index += 2
+        }
+        let interfaceName = interfaceDescriptor.split(separator: ".").last.map(String.init) ?? interfaceDescriptor
+        for prefix in [interfaceDescriptor + ".", interfaceName + "."] where reference.hasPrefix(prefix) {
+            reference.removeFirst(prefix.count)
+            break
+        }
+        guard definitions[reference] != nil else {
+            throw AIDLConstantEvaluationError(message: "unknown String constant '\(reference)' in '\(interfaceDescriptor)'", location: token.location)
+        }
+        return try evaluate(reference)
+    }
+
 }
 
 private func escaped(_ name: String) -> String { "`\(name)`" }
