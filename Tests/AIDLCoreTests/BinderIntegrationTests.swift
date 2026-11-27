@@ -227,6 +227,58 @@ private final class NullStringEndpoint: IBinder {
     #expect(try malformedReader.readInt32() == 42)
 }
 
+@Test func generatedParcelableSizesVariableLengthFields() throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try """
+        package demo;
+        parcelable Payload {
+            int id;
+            String name;
+            @nullable byte[] data;
+            @nullable String note;
+            byte[] trailer;
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedPayload.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+
+    var parcel = Parcel()
+    try Payload(id: 7, name: "A😀", data: [128, 255, 7]).write(to: &parcel)
+    #expect(parcel.bytes.count == 36)
+    var sizeReader = parcel.reader()
+    #expect(try sizeReader.readInt32() == 36)
+    parcel.append(Int32(42))
+    var reader = parcel.reader()
+    let value = try Payload(from: &reader)
+    #expect(value.id == 7 && value.name == "A😀")
+    #expect(value.data == [128, 255, 7])
+    #expect(value.note == nil && value.trailer.isEmpty)
+    #expect(try reader.readInt32() == 42)
+
+    var optional = Parcel()
+    try Payload(name: "", note: "x", trailer: [1]).write(to: &optional)
+    var optionalReader = optional.reader()
+    let other = try Payload(from: &optionalReader)
+    #expect(other.data == nil && other.note == "x" && other.trailer == [1])
+    #expect(optionalReader.isAtEnd)
+
+    var older = Parcel()
+    older.append(Int32(8))
+    older.append(Int32(7))
+    var oldReader = older.reader()
+    let old = try Payload(from: &oldReader)
+    #expect(old.name.isEmpty && old.data == nil && old.note == nil && old.trailer.isEmpty)
+
+    var malformed = Parcel()
+    malformed.append(Int32(12))
+    malformed.append(Int32(7))
+    malformed.appendNullString()
+    var malformedReader = malformed.reader()
+    #expect(throws: ParcelError.invalidLength(-1)) { try Payload(from: &malformedReader) }
+}
+
 private actor EchoEvents {
     private(set) var lastValue: Int64?
 
