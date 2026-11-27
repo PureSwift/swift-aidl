@@ -3,6 +3,59 @@ import Binder
 import Foundation
 import Testing
 
+@Test func generatedStringMapsUseCountAndStringPairs() async throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try """
+        package demo;
+        interface IStringMap {
+            Map<String, String> echo(in Map<String, String> values);
+            @nullable Map<String, String> echoOptional(in @nullable Map<String, String> values);
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedStringMap.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+
+    let stub = StringMapService()
+    let proxy = IStringMapProxy(remote: stub)
+    #expect(try await proxy.echo(["z": "A😀", "a": ""]) == ["a": "", "z": "A😀"])
+    #expect(try await proxy.echoOptional([:]) == [:])
+    #expect(try await proxy.echoOptional(nil) == nil)
+
+    var request = Parcel()
+    request.appendInterfaceToken(IStringMapProxy.descriptor)
+    request.append(Int32(2))
+    request.append("z")
+    request.append("A😀")
+    request.append("a")
+    request.append("")
+    let reply = try await stub.transact(code: IStringMapTransactionCode.echo, data: request, flags: [])
+    var reader = reply.reader()
+    try reader.readException()
+    #expect(try reader.readInt32() == 2)
+    #expect(try reader.readString() == "a")
+    #expect(try reader.readString() == "")
+    #expect(try reader.readString() == "z")
+    #expect(try reader.readString() == "A😀")
+    #expect(reader.isAtEnd)
+
+    var malformed = Parcel()
+    malformed.appendInterfaceToken(IStringMapProxy.descriptor)
+    malformed.append(Int32(1))
+    malformed.append("key")
+    malformed.appendNullString()
+    await #expect(throws: ParcelError.invalidLength(-1)) {
+        try await stub.transact(code: IStringMapTransactionCode.echo, data: malformed, flags: [])
+    }
+}
+
+private final class StringMapService: IStringMapStub, @unchecked Sendable {
+    override func echo(_ values: [String: String]) async throws -> [String: String] { values }
+
+    override func echoOptional(_ values: [String: String]?) async throws -> [String: String]? { values }
+}
+
 @Test func generatedInoutArraysUpdateOnlyAfterValidReply() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     let package = root.appendingPathComponent("demo", isDirectory: true)
