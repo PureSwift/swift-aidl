@@ -145,20 +145,18 @@ struct AIDLSwiftGenerator {
             "    }",
             "}",
         ]
-        if methodTypes.contains(where: \.usesArrayCodec) {
-            let requiresStringReader = methodTypes.contains {
-                if case .stringCollection(_, nullable: false) = $0 { return true }
-                return false
-            }
-            lines += arrayCodec(named: name + "ArrayCodec", requiresStringReader: requiresStringReader)
-        }
-        return lines
+        return lines + arrayCodec(for: methodTypes, owner: name)
     }
 
-    private func arrayCodec(named name: String, requiresStringReader: Bool) -> [String] {
+    private func arrayCodec(for types: [WireType], owner: String) -> [String] {
+        guard types.contains(where: \.usesArrayCodec) else { return [] }
+        let requiresStringReader = types.contains {
+            if case .stringCollection(_, nullable: false) = $0 { return true }
+            return false
+        }
         var lines = [
             "",
-            "private enum \(name) {",
+            "private enum \(owner)ArrayCodec {",
             "    static func read<Element>(",
             "        from reader: inout Parcel.Reader, elementSize: Int,",
             "        readElement: (inout Parcel.Reader) throws -> Element",
@@ -484,6 +482,10 @@ struct AIDLSwiftGenerator {
         if let reference = referenceType(type), nullable || type.annotations.isEmpty {
             return .reference(reference, nullable: nullable)
         }
+        if type.arrayDimensions == 1, type.typeArguments.isEmpty, nullable || type.annotations.isEmpty,
+           let scalar = Scalar(rawValue: type.name), scalar != .byte {
+            return .array(scalar, codec: owner + "ArrayCodec", nullable: nullable)
+        }
         if type.arrayDimensions == 0, type.typeArguments.isEmpty, type.annotations.isEmpty || nullable,
            let qualifiedName = try? resolver.resolveName(type.name, in: file, scope: [owner]),
            let symbol = resolver.symbols[qualifiedName] {
@@ -508,7 +510,8 @@ struct AIDLSwiftGenerator {
 
     private func inlineDeclarationName(_ symbol: AIDLSymbol, owner: String, context: String) throws -> String {
         let name = try identifier(symbol.declaration.name)
-        guard name != owner, symbol.qualifiedName == (symbol.sourceFile.packageName + [name]).joined(separator: ".") else {
+        guard name != owner, name != owner + "ArrayCodec",
+              symbol.qualifiedName == (symbol.sourceFile.packageName + [name]).joined(separator: ".") else {
             throw failure("unsupported Swift field type '\(symbol.qualifiedName)' in \(context)")
         }
         return name
@@ -647,6 +650,7 @@ struct AIDLSwiftGenerator {
         }
         lines += ["        }", "    }"]
         return lines + Self.typedObjectMethods + ["}"]
+            + arrayCodec(for: fields.map(\.field.wireType), owner: union.name)
     }
 
     private func generateParcelable(_ parcelable: AIDLParcelable) throws -> [String] {
@@ -693,7 +697,7 @@ struct AIDLSwiftGenerator {
             "",
             "    public func write(to parcel: inout Parcel) throws {",
         ]
-        if fields.contains(where: { $0.field.isNestedParcelable }) {
+        if fields.contains(where: { $0.field.requiresBufferedPayload }) {
             lines += [
                 "        var payload = Parcel()",
             ]
@@ -710,6 +714,7 @@ struct AIDLSwiftGenerator {
                 "    }",
             ]
             return lines + Self.typedObjectMethods + ["}"]
+                + arrayCodec(for: fields.map(\.field.wireType), owner: parcelable.name)
         }
         let payloadSizes = fields.compactMap { $0.field.variablePayloadSize(of: "self." + $0.name) }
         if payloadSizes.isEmpty {
@@ -919,10 +924,13 @@ struct AIDLSwiftGenerator {
         case reference(Reference, nullable: Bool)
         case enumeration(String, qualifiedName: String, backing: Scalar)
         case parcelable(String, qualifiedName: String, nullable: Bool)
+        case array(Scalar, codec: String, nullable: Bool)
 
-        var isNestedParcelable: Bool {
-            if case .parcelable = self { return true }
-            return false
+        var requiresBufferedPayload: Bool {
+            switch self {
+            case .parcelable, .array: true
+            default: false
+            }
         }
 
         var wireType: WireType {
@@ -933,6 +941,7 @@ struct AIDLSwiftGenerator {
                 .enumeration(name, qualifiedName: qualifiedName, backing: backing)
             case let .parcelable(name, qualifiedName, nullable):
                 .parcelable(name, qualifiedName: qualifiedName, nullable: nullable)
+            case let .array(type, codec, nullable): .scalarArray(type, codec: codec, nullable: nullable)
             }
         }
 
@@ -944,6 +953,7 @@ struct AIDLSwiftGenerator {
             case .reference(.bytes, nullable: false): "[]"
             case let .enumeration(name, _, _): "\(escaped(name))(rawValue: 0)"
             case let .parcelable(name, _, nullable): nullable ? "nil" : "\(escaped(name))()"
+            case let .array(_, _, nullable): nullable ? "nil" : "[]"
             }
         }
 
@@ -953,7 +963,7 @@ struct AIDLSwiftGenerator {
             case let .scalar(type): type.wireSize
             case .reference: 4
             case let .enumeration(_, _, backing): backing.wireSize
-            case .parcelable: 0
+            case .parcelable, .array: 0
             }
         }
 
