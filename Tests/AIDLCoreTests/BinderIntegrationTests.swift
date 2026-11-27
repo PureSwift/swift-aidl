@@ -17,6 +17,7 @@ import Testing
             int update(inout int[] values, inout byte[] bytes);
             void updateObjects(inout String[] labels, inout Chunk[] chunks, inout Mode[] modes);
             void updateLists(inout List<String> labels, inout List<Chunk> chunks);
+            int fillLists(out List<String> labels, out List<Chunk> chunks);
         }
         """.write(to: path, atomically: true, encoding: .utf8)
     try "package demo; parcelable Chunk { int id; long count; boolean complete; }"
@@ -45,6 +46,9 @@ import Testing
     try await proxy.updateLists(&labels, &chunks)
     #expect(labels == ["", "A😀", "new"])
     #expect(chunks.map(\.id) == [1])
+    #expect(try await proxy.fillLists(&labels, &chunks) == 7)
+    #expect(labels == ["out"])
+    #expect(chunks.map(\.id) == [42, 43])
 
     let malformed = IInoutProxy(remote: InvalidInoutReply())
     await #expect(throws: BinderError.failedTransaction) {
@@ -85,6 +89,13 @@ private final class InoutService: IInoutStub, @unchecked Sendable {
     override func updateLists(_ labels: inout [String], _ chunks: inout [Chunk]) async throws {
         labels.append("new")
         if !chunks.isEmpty { chunks.removeFirst() }
+    }
+
+    override func fillLists(_ labels: inout [String], _ chunks: inout [Chunk]) async throws -> Int32 {
+        guard labels.isEmpty, chunks.isEmpty else { throw BinderError.failedTransaction }
+        labels.append("out")
+        chunks = [Chunk(id: 42), Chunk(id: 43)]
+        return 7
     }
 }
 
