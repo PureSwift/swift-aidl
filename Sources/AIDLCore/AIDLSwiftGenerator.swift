@@ -383,11 +383,7 @@ struct AIDLSwiftGenerator {
             if case let .declaration(name) = resolved.target, let symbol = resolver.symbols[name] {
                 let declaration = symbol.declaration
                 if case let .parcelable(parcelable) = declaration, parcelable.isOpaqueForwardDecl {
-                    guard manualParcelables.contains(name) else {
-                        throw failure("register opaque parcelable '\(name)' with a manual BinderParcelable implementation")
-                    }
-                    let shortName = name.split(separator: ".").last.map(String.init) ?? parcelable.name
-                    let swiftName = try swiftDeclarationName(shortName, qualifiedName: name, context: context)
+                    let swiftName = try manualParcelableName(name, context: context)
                     return .manualParcelable(
                         swiftName, qualifiedName: name, codec: file.declarations[0].name + "ManualParcelableCodec", nullable: nullable
                     )
@@ -419,6 +415,12 @@ struct AIDLSwiftGenerator {
         }
         guard let name = try? resolver.resolveName(elementName, in: file, scope: [owner]),
               let symbol = resolver.symbols[name] else { return nil }
+        if ancestors == nil, case let .parcelable(parcelable) = symbol.declaration, parcelable.isOpaqueForwardDecl {
+            let swiftName = try manualParcelableName(name, context: context)
+            return .parcelableCollection(
+                swiftName, qualifiedName: name, codec: codec, nullable: nullable, manualCodec: owner + "ManualParcelableCodec"
+            )
+        }
 
         let backing: Scalar?
         if case let .enumeration(enumeration) = symbol.declaration, type.arrayDimensions == 1 {
@@ -437,6 +439,14 @@ struct AIDLSwiftGenerator {
             return .enumArray(swiftName, qualifiedName: name, backing: backing, codec: codec, nullable: nullable)
         }
         return .parcelableCollection(swiftName, qualifiedName: name, codec: codec, nullable: nullable)
+    }
+
+    private func manualParcelableName(_ qualifiedName: String, context: String) throws -> String {
+        guard manualParcelables.contains(qualifiedName) else {
+            throw failure("register opaque parcelable '\(qualifiedName)' with a manual BinderParcelable implementation")
+        }
+        let shortName = qualifiedName.split(separator: ".").last.map(String.init) ?? qualifiedName
+        return try swiftDeclarationName(shortName, qualifiedName: qualifiedName, context: context)
     }
 
     private func collectionElementName(_ type: AIDLType) -> String? {
@@ -866,7 +876,7 @@ struct AIDLSwiftGenerator {
         case reference(Reference, nullable: Bool)
         case scalarArray(Scalar, codec: String, nullable: Bool)
         case stringCollection(codec: String, nullable: Bool)
-        case parcelableCollection(String, qualifiedName: String, codec: String, nullable: Bool)
+        case parcelableCollection(String, qualifiedName: String, codec: String, nullable: Bool, manualCodec: String? = nil)
         case enumArray(String, qualifiedName: String, backing: Scalar, codec: String, nullable: Bool)
         case parcelable(String, qualifiedName: String, nullable: Bool)
         case manualParcelable(String, qualifiedName: String, codec: String, nullable: Bool)
@@ -875,7 +885,7 @@ struct AIDLSwiftGenerator {
         var declarationIdentity: (String, String)? {
             switch self {
             case let .parcelable(name, qualifiedName, _), let .enumeration(name, qualifiedName, _),
-                 let .parcelableCollection(name, qualifiedName, _, _), let .enumArray(name, qualifiedName, _, _, _),
+                 let .parcelableCollection(name, qualifiedName, _, _, _), let .enumArray(name, qualifiedName, _, _, _),
                  let .manualParcelable(name, qualifiedName, _, _):
                 (name, qualifiedName)
             default: nil
@@ -885,7 +895,7 @@ struct AIDLSwiftGenerator {
         var requiresNonNullRead: Bool {
             switch self {
             case .reference(_, nullable: false), .scalarArray(_, _, nullable: false),
-                 .stringCollection(_, nullable: false), .parcelableCollection(_, _, _, nullable: false),
+                 .stringCollection(_, nullable: false), .parcelableCollection(_, _, _, nullable: false, _),
                  .enumArray(_, _, _, _, nullable: false): true
             default: false
             }
@@ -900,8 +910,11 @@ struct AIDLSwiftGenerator {
         }
 
         var usesManualParcelableCodec: Bool {
-            if case .manualParcelable = self { return true }
-            return false
+            switch self {
+            case .manualParcelable: true
+            case let .parcelableCollection(_, _, _, _, manualCodec): manualCodec != nil
+            default: false
+            }
         }
 
         var swiftType: String {
@@ -910,7 +923,7 @@ struct AIDLSwiftGenerator {
             case let .reference(type, nullable): type.swiftType + (nullable ? "?" : "")
             case let .scalarArray(type, _, nullable): "[\(type.swiftType)]" + (nullable ? "?" : "")
             case let .stringCollection(_, nullable): nullable ? "[String?]?" : "[String]"
-            case let .parcelableCollection(name, _, _, nullable):
+            case let .parcelableCollection(name, _, _, nullable, _):
                 "[" + escaped(name) + (nullable ? "?]?" : "]")
             case let .enumArray(name, _, _, _, nullable):
                 "[" + escaped(name) + (nullable ? "]?" : "]")
@@ -928,7 +941,9 @@ struct AIDLSwiftGenerator {
                 "\(codec).read(from: &\(reader), elementSize: \(type.wireSize), readElement: { try \(type.read(from: "$0")) })"
             case let .stringCollection(codec, nullable):
                 "\(codec).read(from: &\(reader), elementSize: 4, readElement: \(nullable ? "{ try $0.readString() }" : codec + ".readRequiredString"))"
-            case let .parcelableCollection(name, _, codec, nullable):
+            case let .parcelableCollection(name, _, codec, nullable, manualCodec?):
+                "\(codec).read(from: &\(reader), elementSize: 4, readElement: { try \(manualCodec).\(nullable ? "read" : "readRequired")(\(escaped(name)).self, from: &$0) })"
+            case let .parcelableCollection(name, _, codec, nullable, nil):
                 "\(codec).read(from: &\(reader), elementSize: 4, readElement: \(escaped(name)).\(nullable ? "readNullableTypedObject" : "readTypedObject"))"
             case let .enumArray(name, _, .byte, _, _):
                 "\(reader).readBytes()?.map({ \(escaped(name))(rawValue: Int8(bitPattern: $0)) })"
@@ -963,9 +978,11 @@ struct AIDLSwiftGenerator {
                 "try \(codec).write(\(value), to: &\(parcel)) { $1.append($0) }"
             case let .stringCollection(codec, nullable: true):
                 "try \(codec).write(\(value), to: &\(parcel)) { if let value = $0 { $1.append(value) } else { $1.appendNullString() } }"
-            case let .parcelableCollection(_, _, codec, nullable: false):
+            case let .parcelableCollection(_, _, codec, _, manualCodec?):
+                "try \(codec).write(\(value), to: &\(parcel)) { try \(manualCodec).write($0, to: &$1) }"
+            case let .parcelableCollection(_, _, codec, nullable: false, nil):
                 "try \(codec).write(\(value), to: &\(parcel)) { try $0.writeTypedObject(to: &$1) }"
-            case let .parcelableCollection(_, _, codec, nullable: true):
+            case let .parcelableCollection(_, _, codec, nullable: true, nil):
                 "try \(codec).write(\(value), to: &\(parcel)) { if let value = $0 { try value.writeTypedObject(to: &$1) } else { $1.append(Int32(0)) } }"
             case .enumArray(_, _, .byte, _, nullable: false):
                 "\(parcel).append(bytes: \(value).map { UInt8(bitPattern: $0.rawValue) })"
