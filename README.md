@@ -40,6 +40,8 @@ arrays as `inout` parameters.
 Their lengths stay fixed for the call, and the caller receives updates after
 the reply has been decoded.
 Non-nullable `inout List<String>` and typed-object lists can also change length.
+Two-way methods can declare these lists as `out`. The Swift stub receives
+empty lists, and the proxy replaces the caller's lists from the reply.
 `String[]` and `List<String>` map to `[String]`. Their `@nullable` forms
 map to `[String?]?` and preserve null elements.
 Arrays and lists of generated parcelables and unions use Binder typed-object
