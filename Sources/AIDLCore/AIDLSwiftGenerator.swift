@@ -150,7 +150,45 @@ struct AIDLSwiftGenerator {
         if methodTypes.contains(where: \.usesManualParcelableCodec) {
             lines += manualParcelableCodec(owner: name)
         }
+        if methodTypes.contains(where: \.usesMapCodec) {
+            lines += stringMapCodec(owner: name)
+        }
         return lines
+    }
+
+    private func stringMapCodec(owner: String) -> [String] {
+        [
+            "",
+            "private enum \(owner)MapCodec {",
+            "    static func read(from reader: inout Parcel.Reader) throws -> [String: String]? {",
+            "        let count = try reader.readInt32()",
+            "        if count == -1 { return nil }",
+            "        guard count >= 0 else { throw ParcelError.invalidLength(count) }",
+            "        guard Int(count) <= reader.remaining / 8 else { throw ParcelError.endOfParcel }",
+            "        var values: [String: String] = [:]",
+            "        for _ in 0..<count {",
+            "            guard let key = try reader.readString(), let value = try reader.readString() else {",
+            "                throw ParcelError.invalidLength(-1)",
+            "            }",
+            "            guard values.updateValue(value, forKey: key) == nil else { throw BinderError.failedTransaction }",
+            "        }",
+            "        return values",
+            "    }",
+            "",
+            "    static func write(_ values: [String: String]?, to parcel: inout Parcel) throws {",
+            "        guard let values else {",
+            "            parcel.append(Int32(-1))",
+            "            return",
+            "        }",
+            "        guard let count = Int32(exactly: values.count) else { throw BinderError.failedTransaction }",
+            "        parcel.append(count)",
+            "        for (key, value) in values.sorted(by: { $0.key < $1.key }) {",
+            "            parcel.append(key)",
+            "            parcel.append(value)",
+            "        }",
+            "    }",
+            "}",
+        ]
     }
 
     private func manualParcelableCodec(owner: String) -> [String] {
@@ -415,6 +453,10 @@ struct AIDLSwiftGenerator {
         if let reference = referenceType(type) {
             if annotations.isEmpty || nullable { return .reference(reference, nullable: nullable) }
         }
+        if type.name == "Map", type.arrayDimensions == 0, type.typeArguments.count == 2,
+           type.typeArguments.allSatisfy({ $0.name == "String" && isPlain($0) }), annotations.isEmpty || nullable {
+            return .stringMap(codec: file.declarations[0].name + "MapCodec", nullable: nullable)
+        }
         if annotations.isEmpty || nullable,
            let collection = try collectionWireType(
                type, in: file, owner: file.declarations[0].name, nullable: nullable, context: context
@@ -504,7 +546,7 @@ struct AIDLSwiftGenerator {
         let name = try identifier(value)
         let owner = file.declarations[0].name
         guard ![owner, owner + "Proxy", owner + "Stub", owner + "TransactionCode",
-                owner + "ArrayCodec", owner + "ManualParcelableCodec"].contains(name) else {
+                owner + "ArrayCodec", owner + "ManualParcelableCodec", owner + "MapCodec"].contains(name) else {
             throw failure("Swift name collision for '\(qualifiedName)' in \(context)")
         }
         return name
@@ -925,6 +967,7 @@ struct AIDLSwiftGenerator {
         case reference(Reference, nullable: Bool)
         case scalarArray(Scalar, codec: String, nullable: Bool)
         case stringCollection(codec: String, nullable: Bool)
+        case stringMap(codec: String, nullable: Bool)
         case parcelableCollection(String, qualifiedName: String, codec: String, nullable: Bool, manualCodec: String? = nil)
         case enumArray(String, qualifiedName: String, backing: Scalar, codec: String, nullable: Bool)
         case parcelable(String, qualifiedName: String, nullable: Bool)
@@ -945,7 +988,7 @@ struct AIDLSwiftGenerator {
             switch self {
             case .reference(_, nullable: false), .scalarArray(_, _, nullable: false),
                  .stringCollection(_, nullable: false), .parcelableCollection(_, _, _, nullable: false, _),
-                 .enumArray(_, _, _, _, nullable: false): true
+                 .enumArray(_, _, _, _, nullable: false), .stringMap(_, nullable: false): true
             default: false
             }
         }
@@ -966,12 +1009,18 @@ struct AIDLSwiftGenerator {
             }
         }
 
+        var usesMapCodec: Bool {
+            if case .stringMap = self { return true }
+            return false
+        }
+
         var swiftType: String {
             switch self {
             case let .scalar(type): type.swiftType
             case let .reference(type, nullable): type.swiftType + (nullable ? "?" : "")
             case let .scalarArray(type, _, nullable): "[\(type.swiftType)]" + (nullable ? "?" : "")
             case let .stringCollection(_, nullable): nullable ? "[String?]?" : "[String]"
+            case let .stringMap(_, nullable): nullable ? "[String: String]?" : "[String: String]"
             case let .parcelableCollection(name, _, _, nullable, _):
                 "[" + escaped(name) + (nullable ? "?]?" : "]")
             case let .enumArray(name, _, _, _, nullable):
@@ -990,6 +1039,7 @@ struct AIDLSwiftGenerator {
                 "\(codec).read(from: &\(reader), elementSize: \(type.wireSize), readElement: { try \(type.read(from: "$0")) })"
             case let .stringCollection(codec, nullable):
                 "\(codec).read(from: &\(reader), elementSize: 4, readElement: \(nullable ? "{ try $0.readString() }" : codec + ".readRequiredString"))"
+            case let .stringMap(codec, _): "\(codec).read(from: &\(reader))"
             case let .parcelableCollection(name, _, codec, nullable, manualCodec?):
                 "\(codec).read(from: &\(reader), elementSize: 4, readElement: { try \(manualCodec).\(nullable ? "read" : "readRequired")(\(escaped(name)).self, from: &$0) })"
             case let .parcelableCollection(name, _, codec, nullable, nil):
@@ -1028,6 +1078,7 @@ struct AIDLSwiftGenerator {
                 "try \(codec).write(\(value), to: &\(parcel)) { $1.append($0) }"
             case let .stringCollection(codec, nullable: true):
                 "try \(codec).write(\(value), to: &\(parcel)) { if let value = $0 { $1.append(value) } else { $1.appendNullString() } }"
+            case let .stringMap(codec, _): "try \(codec).write(\(value), to: &\(parcel))"
             case let .parcelableCollection(_, _, codec, _, manualCodec?):
                 "try \(codec).write(\(value), to: &\(parcel)) { try \(manualCodec).write($0, to: &$1) }"
             case let .parcelableCollection(_, _, codec, nullable: false, nil):
