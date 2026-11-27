@@ -39,8 +39,8 @@ struct AIDLSwiftGenerator {
     }
 
     private func generateInterface(_ interface: AIDLInterface) throws -> [String] {
-        guard interface.annotations.isEmpty, interface.constants.isEmpty, interface.nestedDeclarations.isEmpty else {
-            throw failure("Swift generation does not support interface annotations, constants, or nested declarations")
+        guard interface.annotations.isEmpty, interface.nestedDeclarations.isEmpty else {
+            throw failure("Swift generation does not support interface annotations or nested declarations")
         }
         let name = try identifier(interface.name)
         var methods = try interface.methods.map { try makeMethod($0, interfaceIsOneway: interface.isOneway) }
@@ -60,6 +60,7 @@ struct AIDLSwiftGenerator {
             }
             methods.append(method)
         }
+        let constants = try generateInterfaceConstants(interface, methodNames: Set(methods.map(\.name)))
         var declarationNames: [String: String] = [:]
         for method in methods {
             let types = method.parameters + (method.result.map { [$0] } ?? [])
@@ -78,6 +79,9 @@ struct AIDLSwiftGenerator {
             "",
             "public extension \(escaped(name)) {",
             "    static var descriptor: String { \(String(reflecting: interface.descriptor)) }",
+        ]
+        lines += constants
+        lines += [
             "}",
             "",
             "public enum \(name)TransactionCode {",
@@ -150,6 +154,22 @@ struct AIDLSwiftGenerator {
             "}",
         ]
         return lines
+    }
+
+    private func generateInterfaceConstants(_ interface: AIDLInterface, methodNames: Set<String>) throws -> [String] {
+        var names = methodNames
+        return try interface.constants.map { constant in
+            let qualifiedName = interface.descriptor + "." + constant.name
+            let name = try identifier(constant.name)
+            guard names.insert(name).inserted else {
+                throw failure("conflicting Swift name for interface constant '\(qualifiedName)'")
+            }
+            guard isPlain(constant.type), let backing = AIDLIntegerBacking(rawValue: constant.type.name),
+                  let type = Scalar(rawValue: backing.rawValue), let value = integerConstants[qualifiedName] else {
+                throw failure("unsupported Swift type '\(constant.type.name)' for interface constant '\(qualifiedName)'")
+            }
+            return "    static var \(escaped(name)): \(type.swiftType) { \(value) }"
+        }
     }
 
     private func metadataMethods() throws -> [Method] {
