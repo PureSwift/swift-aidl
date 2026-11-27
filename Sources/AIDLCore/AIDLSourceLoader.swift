@@ -17,9 +17,15 @@ public enum AIDLSourceLoaderError: Error, Sendable, CustomStringConvertible {
 /// Parsed source files in depth-first discovery order, beginning with the root file.
 public struct AIDLSourceGraph: Sendable {
     public let files: [AIDLFile]
+    public let preprocessedFiles: [AIDLFile]
+    /// Scalar integer constants and enum values keyed by their fully qualified names.
+    public internal(set) var integerConstants: [String: Int64] = [:]
+    /// Fully qualified opaque parcelable names referenced by analyzed declarations.
+    public internal(set) var referencedOpaqueParcelables: Set<String> = []
 
-    public init(files: [AIDLFile]) {
+    public init(files: [AIDLFile], preprocessedFiles: [AIDLFile] = []) {
         self.files = files
+        self.preprocessedFiles = preprocessedFiles
     }
 }
 
@@ -31,16 +37,18 @@ public struct AIDLSourceLoader: Sendable {
         self.includePaths = includePaths
     }
 
-    public func load(sourcePath: String) throws -> AIDLSourceGraph {
+    public func load(sourcePath: String, preprocessedPaths: [String] = []) throws -> AIDLSourceGraph {
+        let preprocessedFiles = try preprocessedPaths.map { try parse(URL(fileURLWithPath: $0)) }
         var files: [AIDLFile] = []
         var visited: Set<URL> = []
-        try loadFile(at: URL(fileURLWithPath: sourcePath), expectedImport: nil, visited: &visited, files: &files)
-        return AIDLSourceGraph(files: files)
+        try loadFile(at: URL(fileURLWithPath: sourcePath), expectedImport: nil, preprocessedFiles: preprocessedFiles, visited: &visited, files: &files)
+        return AIDLSourceGraph(files: files, preprocessedFiles: preprocessedFiles)
     }
 
     private func loadFile(
         at url: URL,
         expectedImport: [String]?,
+        preprocessedFiles: [AIDLFile],
         visited: inout Set<URL>,
         files: inout [AIDLFile]
     ) throws {
@@ -51,39 +59,65 @@ public struct AIDLSourceLoader: Sendable {
             }
             return
         }
-        let source = try String(contentsOf: canonicalURL, encoding: .utf8)
-        var parser = try AIDLParser(source: source, sourcePath: canonicalURL.path)
-        let file = try parser.parse()
+        let file = try parse(canonicalURL)
         if let expectedImport { try validate(expectedImport, in: file) }
         visited.insert(canonicalURL)
         files.append(file)
 
         for importedName in file.imports {
-            let relativePath = importedName.joined(separator: "/") + ".aidl"
-            let resolved = includePaths.lazy
-                .map { URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent(relativePath) }
-                .first { FileManager.default.fileExists(atPath: $0.path) }
-            guard let resolved else {
+            let name = importedName.joined(separator: ".")
+            if AIDLTypeResolver.builtinName(name) != nil || declares(name, in: file) {
+                continue
+            }
+            guard let resolved = resolveImport(importedName) else {
+                if preprocessedFiles.contains(where: { declares(name, in: $0, allowEnclosingName: false) }) {
+                    continue
+                }
                 throw AIDLSourceLoaderError.importNotFound(
-                    name: importedName.joined(separator: "."), importedBy: canonicalURL.path, includePaths: includePaths
+                    name: name, importedBy: canonicalURL.path, includePaths: includePaths
                 )
             }
-            try loadFile(at: resolved, expectedImport: importedName, visited: &visited, files: &files)
+            try loadFile(at: resolved, expectedImport: importedName, preprocessedFiles: preprocessedFiles, visited: &visited, files: &files)
         }
     }
 
-    private func validate(_ importedName: [String], in file: AIDLFile) throws {
-        let declarationNames = file.declarations.map { declaration in
-            switch declaration {
-            case let .interface(value): value.name
-            case let .parcelable(value): value.name
-            case let .enumeration(value): value.name
-            case let .union(value): value.name
+    private func parse(_ url: URL) throws -> AIDLFile {
+        let source = try String(contentsOf: url, encoding: .utf8)
+        var parser = try AIDLParser(source: source, sourcePath: url.path)
+        return try parser.parse()
+    }
+
+    private func resolveImport(_ name: [String]) -> URL? {
+        // Nested types may be declared in the enclosing type's file.
+        for length in stride(from: name.count, through: 1, by: -1) {
+            let relativePath = name.prefix(length).joined(separator: "/") + ".aidl"
+            for path in includePaths {
+                let candidate = URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent(relativePath)
+                if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
             }
         }
-        guard Array(importedName.dropLast()) == file.packageName,
-              let name = importedName.last, declarationNames.contains(name) else {
-            throw AIDLSourceLoaderError.declarationMismatch(name: importedName.joined(separator: "."), path: file.sourcePath)
+        return nil
+    }
+
+    private func validate(_ importedName: [String], in file: AIDLFile) throws {
+        let name = importedName.joined(separator: ".")
+        guard declares(name, in: file) else {
+            throw AIDLSourceLoaderError.declarationMismatch(name: name, path: file.sourcePath)
         }
+    }
+
+    private func declares(_ name: String, in file: AIDLFile, allowEnclosingName: Bool = true) -> Bool {
+        let package = file.packageName.joined(separator: ".")
+        guard package.isEmpty || name.hasPrefix(package + ".") else { return false }
+
+        func contains(_ declarations: [AIDLDeclaration], prefix: [String]) -> Bool {
+            declarations.contains { declaration in
+                let path = prefix + [declaration.name]
+                let qualifiedName = path.joined(separator: ".")
+                return qualifiedName == name || (allowEnclosingName && qualifiedName.hasPrefix(name + "."))
+                    || contains(declaration.nestedDeclarations, prefix: path)
+            }
+        }
+        return contains(file.declarations, prefix: file.packageName)
     }
 }
