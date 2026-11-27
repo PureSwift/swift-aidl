@@ -33,7 +33,8 @@ methods, and one-way calls. Interface methods also support `String` and
 The generator emits `BinderParcelable` structs for
 structured parcelables with scalar fields and implicit defaults. For a method
 that takes or returns a parcelable, generate the interface and the parcelable
-separately, passing the import root with `-I`. Compile both outputs in a target
+separately, passing the import root with `-I`. Use `@nullable` on a parcelable
+input or result to generate an optional Swift value. Compile both outputs in a target
 that depends on `Binder` 0.2.1.
 
 ### SwiftPM build tool plugin
