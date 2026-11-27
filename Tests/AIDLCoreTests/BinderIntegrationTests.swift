@@ -35,6 +35,8 @@ import Testing
             @nullable double[] echoDoubles(in @nullable double[] value);
             String[] echoTexts(in String[] value);
             @nullable List<String> echoOptionalTexts(in @nullable List<String> value);
+            Chunk[] echoChunks(in Chunk[] value);
+            @nullable List<Chunk> echoOptionalChunks(in @nullable List<Chunk> value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -163,6 +165,13 @@ import Testing
     #expect(try await proxy.echoOptionalTexts(["A😀", nil, ""]) == ["A😀", nil, ""])
     #expect(try await proxy.echoOptionalTexts([]) == [])
     #expect(try await proxy.echoOptionalTexts(nil) == nil)
+    let chunks = try await proxy.echoChunks([Chunk(id: 1, count: .min), Chunk(id: 2, count: .max)])
+    #expect(chunks.map(\.id) == [1, 2])
+    #expect(chunks.map(\.count) == [Int64.min, Int64.max])
+    #expect(try await proxy.echoChunks([]).isEmpty)
+    let optionalChunks = try #require(await proxy.echoOptionalChunks([nil, Chunk(id: 3), nil]))
+    #expect(optionalChunks.map { $0?.id } == [nil, 3, nil])
+    #expect(try await proxy.echoOptionalChunks(nil) == nil)
 
     var truncated = Parcel()
     truncated.appendInterfaceToken(IEchoProxy.descriptor)
@@ -178,6 +187,14 @@ import Testing
     invalidStringArray.appendNullString()
     await #expect(throws: ParcelError.invalidLength(-1)) {
         try await stub.transact(code: IEchoTransactionCode.echoTexts, data: invalidStringArray, flags: [])
+    }
+
+    var invalidChunkArray = Parcel()
+    invalidChunkArray.appendInterfaceToken(IEchoProxy.descriptor)
+    invalidChunkArray.append(Int32(1))
+    invalidChunkArray.append(Int32(0))
+    await #expect(throws: BinderError.failedTransaction) {
+        try await stub.transact(code: IEchoTransactionCode.echoChunks, data: invalidChunkArray, flags: [])
     }
 
     var invalidRequest = Parcel()
@@ -442,4 +459,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoTexts(_ value: [String]) async throws -> [String] { value }
 
     override func echoOptionalTexts(_ value: [String?]?) async throws -> [String?]? { value }
+
+    override func echoChunks(_ value: [Chunk]) async throws -> [Chunk] { value }
+
+    override func echoOptionalChunks(_ value: [Chunk?]?) async throws -> [Chunk?]? { value }
 }
