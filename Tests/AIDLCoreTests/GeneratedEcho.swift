@@ -14,6 +14,8 @@ public protocol `IEcho`: BinderInterface {
     func `echoOptionalBytes`(_ argument0: [UInt8]?) async throws -> [UInt8]?
     func `echoMode`(_ argument0: `Mode`) async throws -> `Mode`
     func `echoChoice`(_ argument0: `Choice`) async throws -> `Choice`
+    func `echoInts`(_ argument0: [Int32]) async throws -> [Int32]
+    func `echoLongs`(_ argument0: [Int64]?) async throws -> [Int64]?
     func `getInterfaceVersion`() async throws -> Int32
     func `getInterfaceHash`() async throws -> String
 }
@@ -40,6 +42,8 @@ public enum IEchoTransactionCode {
     public static let `echoOptionalBytes`: UInt32 = 10
     public static let `echoMode`: UInt32 = 11
     public static let `echoChoice`: UInt32 = 12
+    public static let `echoInts`: UInt32 = 13
+    public static let `echoLongs`: UInt32 = 14
     public static let `getInterfaceVersion`: UInt32 = 16777215
     public static let `getInterfaceHash`: UInt32 = 16777214
 }
@@ -188,6 +192,27 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         return try `Choice`.readTypedObject(from: &reader)
     }
 
+    public func `echoInts`(_ argument0: [Int32]) async throws -> [Int32] {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { $1.append($0) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoInts`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readInt32() }) else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
+    public func `echoLongs`(_ argument0: [Int64]?) async throws -> [Int64]? {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { $1.append($0) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoLongs`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try IEchoArrayCodec.read(from: &reader, elementSize: 8, readElement: { try $0.readInt64() })
+    }
+
     public func `getInterfaceVersion`() async throws -> Int32 {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
@@ -261,6 +286,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoChoice`(_ argument0: `Choice`) async throws -> `Choice` {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoChoice`)
+    }
+
+    open func `echoInts`(_ argument0: [Int32]) async throws -> [Int32] {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoInts`)
+    }
+
+    open func `echoLongs`(_ argument0: [Int64]?) async throws -> [Int64]? {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoLongs`)
     }
 
     open func `getInterfaceVersion`() async throws -> Int32 {
@@ -371,6 +404,22 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             reply.writeNoException()
             try result.writeTypedObject(to: &reply)
             return true
+        case IEchoTransactionCode.`echoInts`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: { try $0.readInt32() }) else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoInts`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { $1.append($0) }
+            return true
+        case IEchoTransactionCode.`echoLongs`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 8, readElement: { try $0.readInt64() })
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoLongs`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { $1.append($0) }
+            return true
         case IEchoTransactionCode.`getInterfaceVersion`:
             try data.enforceInterface(Self.descriptor)
             guard data.isAtEnd else { throw BinderError.failedTransaction }
@@ -388,5 +437,31 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)
         }
+    }
+}
+
+private enum IEchoArrayCodec {
+    static func read<Element>(
+        from reader: inout Parcel.Reader, elementSize: Int,
+        readElement: (inout Parcel.Reader) throws -> Element
+    ) throws -> [Element]? {
+        let count = try reader.readInt32()
+        if count == -1 { return nil }
+        guard count >= 0 else { throw ParcelError.invalidLength(count) }
+        guard Int(count) <= reader.remaining / elementSize else { throw ParcelError.endOfParcel }
+        return try (0..<Int(count)).map { _ in try readElement(&reader) }
+    }
+
+    static func write<Element>(
+        _ values: [Element]?, to parcel: inout Parcel,
+        writeElement: (Element, inout Parcel) -> Void
+    ) throws {
+        guard let values else {
+            parcel.append(Int32(-1))
+            return
+        }
+        guard let count = Int32(exactly: values.count) else { throw BinderError.failedTransaction }
+        parcel.append(count)
+        for value in values { writeElement(value, &parcel) }
     }
 }
