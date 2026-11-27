@@ -63,7 +63,11 @@ import Testing
         (mode, "GeneratedMode.swift"),
         (choice, "GeneratedChoice.swift"),
     ] {
-        let emitted = try compiler.compile(sourcePath: source.path, includePaths: [directory.path])
+        let emitted = try compiler.compile(
+            sourcePath: source.path, includePaths: [directory.path],
+            interfaceVersion: source == input ? 3 : nil,
+            interfaceHash: source == input ? "notfrozen" : nil
+        )
         let fixture = fixtures.appendingPathComponent(fixtureName)
         #expect(emitted == (try String(contentsOf: fixture, encoding: .utf8)))
     }
@@ -76,6 +80,10 @@ import Testing
     #expect(IEchoTransactionCode.scale == 3)
     #expect(IEchoTransactionCode.matches == 4)
     #expect(IEchoTransactionCode.roundTrip == 5)
+    #expect(IEchoTransactionCode.getInterfaceVersion == 0x00ff_ffff)
+    #expect(IEchoTransactionCode.getInterfaceHash == 0x00ff_fffe)
+    #expect(try await proxy.getInterfaceVersion() == 3)
+    #expect(try await proxy.getInterfaceHash() == "notfrozen")
 
     #expect(try await proxy.echo(-42) == -42)
     try await proxy.notify(.min)
