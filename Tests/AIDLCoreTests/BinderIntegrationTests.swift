@@ -7,6 +7,7 @@ import Testing
     let source = """
         package demo;
         import demo.Chunk;
+        import demo.Mode;
         interface IEcho {
             int echo(int value);
             oneway void notify(long value);
@@ -18,6 +19,7 @@ import Testing
             @nullable String echoOptionalText(in @nullable String value);
             byte[] echoBytes(in byte[] value);
             @nullable byte[] echoOptionalBytes(in @nullable byte[] value);
+            Mode echoMode(Mode value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -35,11 +37,21 @@ import Testing
             boolean complete;
         }
         """.write(to: chunk, atomically: true, encoding: .utf8)
+    let mode = package.appendingPathComponent("Mode.aidl")
+    try """
+        package demo;
+        @Backing(type="int")
+        enum Mode { IDLE, RUNNING = 4, STOPPING }
+        """.write(to: mode, atomically: true, encoding: .utf8)
 
     // Compile a checked-in copy of the generated source as part of this test target.
     let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     let compiler = AIDLCompiler()
-    for (source, fixtureName) in [(input, "GeneratedEcho.swift"), (chunk, "GeneratedChunk.swift")] {
+    for (source, fixtureName) in [
+        (input, "GeneratedEcho.swift"),
+        (chunk, "GeneratedChunk.swift"),
+        (mode, "GeneratedMode.swift"),
+    ] {
         let emitted = try compiler.compile(sourcePath: source.path, includePaths: [directory.path])
         let fixture = fixtures.appendingPathComponent(fixtureName)
         #expect(emitted == (try String(contentsOf: fixture, encoding: .utf8)))
@@ -74,6 +86,11 @@ import Testing
     #expect(try await proxy.echoBytes([0, 128, 255]) == [0, 128, 255])
     #expect(try await proxy.echoOptionalBytes([]) == [])
     #expect(try await proxy.echoOptionalBytes(nil) == nil)
+    #expect(Mode.IDLE.rawValue == 0)
+    #expect(Mode.RUNNING.rawValue == 4)
+    #expect(Mode.STOPPING.rawValue == 5)
+    #expect(try await proxy.echoMode(.RUNNING) == .RUNNING)
+    #expect(try await proxy.echoMode(Mode(rawValue: .min)).rawValue == Int32.min)
 
     var invalidRequest = Parcel()
     invalidRequest.appendInterfaceToken(IEchoProxy.descriptor)
@@ -198,4 +215,6 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoBytes(_ value: [UInt8]) async throws -> [UInt8] { value }
 
     override func echoOptionalBytes(_ value: [UInt8]?) async throws -> [UInt8]? { value }
+
+    override func echoMode(_ value: Mode) async throws -> Mode { value }
 }
