@@ -465,11 +465,7 @@ struct AIDLSwiftGenerator {
               parcelable.nestedDeclarations.isEmpty else {
             throw failure("Swift generation requires a plain structured parcelable for '\(name)'")
         }
-        let qualifiedName = (file.packageName + [name]).joined(separator: ".")
-        var ancestry = ancestors
-        guard ancestry.insert(qualifiedName).inserted else {
-            throw failure("recursive Swift parcelable field involving '\(qualifiedName)'")
-        }
+        let ancestry = try fieldAncestry(for: name, in: file, ancestors: ancestors)
         let fields = try fields(parcelable.fields, in: name) { field, context in
             let wire = try inlineField(field.type, in: file, owner: name, context: context, ancestors: ancestry)
             let initialValue = try field.defaultValue.map { tokens in
@@ -482,7 +478,7 @@ struct AIDLSwiftGenerator {
     }
 
     private func inlineField(
-        _ type: AIDLType, in file: AIDLFile, owner: String, context: String, ancestors: Set<String>? = nil
+        _ type: AIDLType, in file: AIDLFile, owner: String, context: String, ancestors: Set<String>
     ) throws -> ParcelableField {
         let nullable = isNullableAnnotation(type.annotations)
         if let reference = referenceType(type), nullable || type.annotations.isEmpty {
@@ -496,11 +492,13 @@ struct AIDLSwiftGenerator {
                 let name = try inlineDeclarationName(symbol, owner: owner, context: context)
                 return .enumeration(name, qualifiedName: qualifiedName, backing: try enumBacking(enumeration))
             case let .parcelable(parcelable):
-                if let ancestors {
-                    _ = try parcelableFields(parcelable, declaredIn: symbol.sourceFile, ancestors: ancestors)
-                    let name = try inlineDeclarationName(symbol, owner: owner, context: context)
-                    return .parcelable(name, qualifiedName: qualifiedName, nullable: nullable)
-                }
+                _ = try parcelableFields(parcelable, declaredIn: symbol.sourceFile, ancestors: ancestors)
+                let name = try inlineDeclarationName(symbol, owner: owner, context: context)
+                return .parcelable(name, qualifiedName: qualifiedName, nullable: nullable)
+            case let .union(union):
+                _ = try unionFields(union, declaredIn: symbol.sourceFile, ancestors: ancestors)
+                let name = try inlineDeclarationName(symbol, owner: owner, context: context)
+                return .parcelable(name, qualifiedName: qualifiedName, nullable: nullable)
             default:
                 break
             }
@@ -555,18 +553,30 @@ struct AIDLSwiftGenerator {
         throw failure("unsupported explicit default for \(context)")
     }
 
-    private func unionFields(_ union: AIDLUnion, declaredIn file: AIDLFile) throws -> [(name: String, field: WireType)] {
+    private func unionFields(
+        _ union: AIDLUnion, declaredIn file: AIDLFile, ancestors: Set<String> = []
+    ) throws -> [(name: String, field: ParcelableField)] {
         guard union.annotations.isEmpty, union.constants.isEmpty, union.nestedDeclarations.isEmpty, !union.fields.isEmpty else {
             throw failure("Swift generation requires a plain union with at least one field for '\(union.name)'")
         }
+        let ancestry = try fieldAncestry(for: union.name, in: file, ancestors: ancestors)
         let fields = try fields(union.fields, in: union.name) { field, context in
             guard field.defaultValue == nil else {
                 throw failure("Swift generation does not support an explicit default for \(context)")
             }
-            return try inlineField(field.type, in: file, owner: union.name, context: context).wireType
+            return try inlineField(field.type, in: file, owner: union.name, context: context, ancestors: ancestry)
         }
-        try validateSwiftTypeNames(fields.map(\.field))
+        try validateSwiftTypeNames(fields.map(\.field.wireType))
         return fields
+    }
+
+    private func fieldAncestry(for name: String, in file: AIDLFile, ancestors: Set<String>) throws -> Set<String> {
+        let qualifiedName = (file.packageName + [name]).joined(separator: ".")
+        var ancestry = ancestors
+        guard ancestry.insert(qualifiedName).inserted else {
+            throw failure("recursive Swift typed-object field involving '\(qualifiedName)'")
+        }
+        return ancestry
     }
 
     private func validateSwiftTypeNames(_ types: [WireType]) throws {
@@ -597,20 +607,26 @@ struct AIDLSwiftGenerator {
     private func generateUnion(_ union: AIDLUnion) throws -> [String] {
         let name = escaped(try identifier(union.name))
         let fields = try unionFields(union, declaredIn: file)
+        guard let first = fields.first else { throw failure("union '\(union.name)' has no variants") }
         var lines = ["public enum \(name): BinderParcelable {"]
-        lines += fields.map { "    case \($0.name)(\($0.field.swiftType))" }
+        lines += fields.map { "    case \($0.name)(\($0.field.wireType.swiftType))" }
         lines += [
+            "",
+            "    public init() {",
+            "        self = .\(first.name)(\(first.field.initialValue))",
+            "    }",
             "",
             "    public init(from reader: inout Parcel.Reader) throws {",
             "        switch try reader.readInt32() {",
         ]
         for (tag, field) in fields.enumerated() {
+            let type = field.field.wireType
             lines.append("        case \(tag):")
-            if field.field.requiresNonNullRead {
-                lines.append("            \(field.field.decode(from: "reader", binding: "value"))")
+            if type.requiresNonNullRead {
+                lines.append("            \(type.decode(from: "reader", binding: "value"))")
                 lines.append("            self = .\(field.name)(value)")
             } else {
-                lines.append("            self = try .\(field.name)(\(field.field.read(from: "reader")))")
+                lines.append("            self = try .\(field.name)(\(type.read(from: "reader")))")
             }
         }
         lines += [
@@ -626,7 +642,7 @@ struct AIDLSwiftGenerator {
             lines += [
                 "        case let .\(field.name)(value):",
                 "            parcel.append(Int32(\(tag)))",
-                "            \(field.field.write("value", to: "parcel"))",
+                "            \(field.field.wireType.write("value", to: "parcel"))",
             ]
         }
         lines += ["        }", "    }"]
