@@ -79,6 +79,22 @@ struct AIDLSwiftGenerator {
             "    public init(remote: any IBinder) {",
             "        self.remote = remote",
             "    }",
+            "",
+            "    public init(remote: RemoteProxy) {",
+            "        self.init(remote: RemoteEndpoint(proxy: remote))",
+            "    }",
+            "",
+            "    private final class RemoteEndpoint: IBinder {",
+            "        let proxy: RemoteProxy",
+            "",
+            "        init(proxy: RemoteProxy) {",
+            "            self.proxy = proxy",
+            "        }",
+            "",
+            "        func transact(code: UInt32, data: Parcel, flags: TransactionFlags) async throws -> Parcel {",
+            "            try await proxy.transact(code: code, request: data, flags: flags)",
+            "        }",
+            "    }",
         ]
         for method in methods {
             lines += proxy(method, interfaceName: name)
@@ -425,7 +441,7 @@ struct AIDLSwiftGenerator {
         let reserved: Set<String> = [
             "_", "self", "Self", "super", "init", "deinit", "asBinder", "descriptor",
             "onTransact", "transact", "interfaceDescriptor", "remote", "Parcel",
-            "BinderProxy", "BinderStub", "BinderInterface", "IBinder", "TransactionFlags",
+            "BinderProxy", "BinderStub", "BinderInterface", "IBinder", "TransactionFlags", "RemoteProxy", "RemoteEndpoint",
             "BinderTransactionError", "BinderError", "Int8", "Int32", "Int64", "UInt16", "UInt32",
             "UInt8", "UInt64", "Bool", "Float", "Double", "String", "Array", "BinderParcelable", "ParcelError",
             "RawRepresentable", "Hashable", "Sendable",
