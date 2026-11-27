@@ -14,6 +14,8 @@ public protocol `IEcho`: BinderInterface {
     func `echoOptionalBytes`(_ argument0: [UInt8]?) async throws -> [UInt8]?
     func `echoMode`(_ argument0: `Mode`) async throws -> `Mode`
     func `echoChoice`(_ argument0: `Choice`) async throws -> `Choice`
+    func `getInterfaceVersion`() async throws -> Int32
+    func `getInterfaceHash`() async throws -> String
 }
 
 public extension `IEcho` {
@@ -33,6 +35,8 @@ public enum IEchoTransactionCode {
     public static let `echoOptionalBytes`: UInt32 = 10
     public static let `echoMode`: UInt32 = 11
     public static let `echoChoice`: UInt32 = 12
+    public static let `getInterfaceVersion`: UInt32 = 16777215
+    public static let `getInterfaceHash`: UInt32 = 16777214
 }
 
 public struct IEchoProxy: `IEcho`, BinderProxy {
@@ -178,6 +182,25 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         try reader.readException()
         return try `Choice`.readTypedObject(from: &reader)
     }
+
+    public func `getInterfaceVersion`() async throws -> Int32 {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        let reply = try await remote.transact(code: IEchoTransactionCode.`getInterfaceVersion`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try reader.readInt32()
+    }
+
+    public func `getInterfaceHash`() async throws -> String {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        let reply = try await remote.transact(code: IEchoTransactionCode.`getInterfaceHash`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try reader.readString() else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
 }
 
 open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
@@ -233,6 +256,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoChoice`(_ argument0: `Choice`) async throws -> `Choice` {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoChoice`)
+    }
+
+    open func `getInterfaceVersion`() async throws -> Int32 {
+        return 3
+    }
+
+    open func `getInterfaceHash`() async throws -> String {
+        return "notfrozen"
     }
 
     public override func onTransact(
@@ -334,6 +365,20 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`echoChoice`(argument0)
             reply.writeNoException()
             try result.writeTypedObject(to: &reply)
+            return true
+        case IEchoTransactionCode.`getInterfaceVersion`:
+            try data.enforceInterface(Self.descriptor)
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`getInterfaceVersion`()
+            reply.writeNoException()
+            reply.append(result)
+            return true
+        case IEchoTransactionCode.`getInterfaceHash`:
+            try data.enforceInterface(Self.descriptor)
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`getInterfaceHash`()
+            reply.writeNoException()
+            reply.append(result)
             return true
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)
