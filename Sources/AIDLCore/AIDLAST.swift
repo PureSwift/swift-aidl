@@ -68,6 +68,9 @@ public struct AIDLParcelable: Equatable, Sendable {
     public let name: String
     public let annotations: [AIDLAnnotation]
     public let isOpaqueForwardDecl: Bool
+    public let typeParameters: [String]
+    /// Backend declaration keywords and their string literal tokens.
+    public let backendNames: [String: AIDLToken]
     public let fields: [AIDLField]
     public let constants: [AIDLConstant]
     public let nestedDeclarations: [AIDLDeclaration]
