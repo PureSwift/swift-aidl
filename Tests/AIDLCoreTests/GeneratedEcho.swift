@@ -9,6 +9,8 @@ public protocol `IEcho`: BinderInterface {
     func `roundTrip`(_ argument0: `Chunk`) async throws -> `Chunk`
     func `echoText`(_ argument0: String) async throws -> String
     func `echoOptionalText`(_ argument0: String?) async throws -> String?
+    func `echoBytes`(_ argument0: [UInt8]) async throws -> [UInt8]
+    func `echoOptionalBytes`(_ argument0: [UInt8]?) async throws -> [UInt8]?
 }
 
 public extension `IEcho` {
@@ -23,6 +25,8 @@ public enum IEchoTransactionCode {
     public static let `roundTrip`: UInt32 = 5
     public static let `echoText`: UInt32 = 6
     public static let `echoOptionalText`: UInt32 = 7
+    public static let `echoBytes`: UInt32 = 8
+    public static let `echoOptionalBytes`: UInt32 = 9
 }
 
 public struct IEchoProxy: `IEcho`, BinderProxy {
@@ -101,6 +105,27 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         try reader.readException()
         return try reader.readString()
     }
+
+    public func `echoBytes`(_ argument0: [UInt8]) async throws -> [UInt8] {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        request.append(bytes: argument0)
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoBytes`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try reader.readBytes() else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
+    public func `echoOptionalBytes`(_ argument0: [UInt8]?) async throws -> [UInt8]? {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        if let value = argument0 { request.append(bytes: value) } else { request.appendNullBytes() }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoOptionalBytes`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try reader.readBytes()
+    }
 }
 
 open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
@@ -136,6 +161,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoOptionalText`(_ argument0: String?) async throws -> String? {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoOptionalText`)
+    }
+
+    open func `echoBytes`(_ argument0: [UInt8]) async throws -> [UInt8] {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoBytes`)
+    }
+
+    open func `echoOptionalBytes`(_ argument0: [UInt8]?) async throws -> [UInt8]? {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoOptionalBytes`)
     }
 
     public override func onTransact(
@@ -197,6 +230,22 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`echoOptionalText`(argument0)
             reply.writeNoException()
             if let value = result { reply.append(value) } else { reply.appendNullString() }
+            return true
+        case IEchoTransactionCode.`echoBytes`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try data.readBytes() else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoBytes`(argument0)
+            reply.writeNoException()
+            reply.append(bytes: result)
+            return true
+        case IEchoTransactionCode.`echoOptionalBytes`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try data.readBytes()
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoOptionalBytes`(argument0)
+            reply.writeNoException()
+            if let value = result { reply.append(bytes: value) } else { reply.appendNullBytes() }
             return true
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)
