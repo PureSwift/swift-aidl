@@ -47,6 +47,8 @@ import Testing
             Nested echoNested(in Nested value);
             ManualStamp echoStamp(in ManualStamp value);
             @nullable ManualStamp echoOptionalStamp(in @nullable ManualStamp value);
+            ManualStamp[] echoStamps(in ManualStamp[] value);
+            @nullable List<ManualStamp> echoOptionalStamps(in @nullable List<ManualStamp> value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -294,6 +296,19 @@ import Testing
     #expect(try await proxy.echoStamp(stamp) == stamp)
     #expect(try await proxy.echoOptionalStamp(stamp) == stamp)
     #expect(try await proxy.echoOptionalStamp(nil) == nil)
+    let anotherStamp = ManualStamp(serial: 7, enabled: false)
+    #expect(try await proxy.echoStamps([stamp, anotherStamp]) == [stamp, anotherStamp])
+    #expect(try await proxy.echoStamps([]).isEmpty)
+    #expect(try await proxy.echoOptionalStamps([nil, anotherStamp, nil]) == [nil, anotherStamp, nil])
+    #expect(try await proxy.echoOptionalStamps(nil) == nil)
+
+    var invalidStamps = Parcel()
+    invalidStamps.appendInterfaceToken(IEchoProxy.descriptor)
+    invalidStamps.append(Int32(1))
+    invalidStamps.append(Int32(0))
+    await #expect(throws: BinderError.failedTransaction) {
+        try await stub.transact(code: IEchoTransactionCode.echoStamps, data: invalidStamps, flags: [])
+    }
 
     var byteModes = Parcel()
     byteModes.appendInterfaceToken(IEchoProxy.descriptor)
@@ -761,4 +776,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoStamp(_ value: ManualStamp) async throws -> ManualStamp { value }
 
     override func echoOptionalStamp(_ value: ManualStamp?) async throws -> ManualStamp? { value }
+
+    override func echoStamps(_ value: [ManualStamp]) async throws -> [ManualStamp] { value }
+
+    override func echoOptionalStamps(_ value: [ManualStamp?]?) async throws -> [ManualStamp?]? { value }
 }
