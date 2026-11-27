@@ -46,6 +46,19 @@ AIDL unions with scalar fields generate Swift enums with associated values.
 The wire tag follows declaration order and only the active value is encoded.
 Generate imported unions separately alongside their interfaces.
 
+Generated proxies accept the `RemoteProxy` returned by Binder service lookup.
+For example, if a service implements the generated `IEcho` interface:
+
+```swift
+import Binder
+
+let connection = try BinderConnection(path: "/dev/binder")
+if let service = try await connection.checkService(named: "echo") {
+    let echo = IEchoProxy(remote: service)
+    print(try await echo.echo(42))
+}
+```
+
 ### SwiftPM build tool plugin
 
 Add the `AIDLPlugin` plugin and the `Binder` product to the target that uses
