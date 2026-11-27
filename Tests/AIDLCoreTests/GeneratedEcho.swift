@@ -20,6 +20,8 @@ public protocol `IEcho`: BinderInterface {
 
 public extension `IEcho` {
     static var descriptor: String { "demo.IEcho" }
+    static var `LABEL`: String { "swift binder!" }
+    static var `WORD`: String { "binder" }
     static var `LOW`: Int8 { -7 }
     static var `MASK`: Int32 { -2147483643 }
     static var `WIDE`: Int64 { 1099511628025 }
