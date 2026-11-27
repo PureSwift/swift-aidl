@@ -20,6 +20,8 @@ public protocol `IEcho`: BinderInterface {
     func `echoChars`(_ argument0: [UInt16]) async throws -> [UInt16]
     func `echoFloats`(_ argument0: [Float]) async throws -> [Float]
     func `echoDoubles`(_ argument0: [Double]?) async throws -> [Double]?
+    func `echoTexts`(_ argument0: [String]) async throws -> [String]
+    func `echoOptionalTexts`(_ argument0: [String?]?) async throws -> [String?]?
     func `getInterfaceVersion`() async throws -> Int32
     func `getInterfaceHash`() async throws -> String
 }
@@ -52,6 +54,8 @@ public enum IEchoTransactionCode {
     public static let `echoChars`: UInt32 = 16
     public static let `echoFloats`: UInt32 = 17
     public static let `echoDoubles`: UInt32 = 18
+    public static let `echoTexts`: UInt32 = 19
+    public static let `echoOptionalTexts`: UInt32 = 20
     public static let `getInterfaceVersion`: UInt32 = 16777215
     public static let `getInterfaceHash`: UInt32 = 16777214
 }
@@ -264,6 +268,27 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         return try IEchoArrayCodec.read(from: &reader, elementSize: 8, readElement: { try Double(bitPattern: UInt64(bitPattern: $0.readInt64())) })
     }
 
+    public func `echoTexts`(_ argument0: [String]) async throws -> [String] {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { $1.append($0) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoTexts`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: IEchoArrayCodec.readRequiredString) else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
+    public func `echoOptionalTexts`(_ argument0: [String?]?) async throws -> [String?]? {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { if let value = $0 { $1.append(value) } else { $1.appendNullString() } }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoOptionalTexts`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readString() })
+    }
+
     public func `getInterfaceVersion`() async throws -> Int32 {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
@@ -361,6 +386,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoDoubles`(_ argument0: [Double]?) async throws -> [Double]? {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoDoubles`)
+    }
+
+    open func `echoTexts`(_ argument0: [String]) async throws -> [String] {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoTexts`)
+    }
+
+    open func `echoOptionalTexts`(_ argument0: [String?]?) async throws -> [String?]? {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoOptionalTexts`)
     }
 
     open func `getInterfaceVersion`() async throws -> Int32 {
@@ -519,6 +552,22 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             reply.writeNoException()
             try IEchoArrayCodec.write(result, to: &reply) { $1.append(Int64(bitPattern: $0.bitPattern)) }
             return true
+        case IEchoTransactionCode.`echoTexts`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: IEchoArrayCodec.readRequiredString) else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoTexts`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { $1.append($0) }
+            return true
+        case IEchoTransactionCode.`echoOptionalTexts`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: { try $0.readString() })
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoOptionalTexts`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { if let value = $0 { $1.append(value) } else { $1.appendNullString() } }
+            return true
         case IEchoTransactionCode.`getInterfaceVersion`:
             try data.enforceInterface(Self.descriptor)
             guard data.isAtEnd else { throw BinderError.failedTransaction }
@@ -562,5 +611,10 @@ private enum IEchoArrayCodec {
         guard let count = Int32(exactly: values.count) else { throw BinderError.failedTransaction }
         parcel.append(count)
         for value in values { writeElement(value, &parcel) }
+    }
+
+    static func readRequiredString(from reader: inout Parcel.Reader) throws -> String {
+        guard let value = try reader.readString() else { throw ParcelError.invalidLength(-1) }
+        return value
     }
 }
