@@ -146,12 +146,17 @@ struct AIDLSwiftGenerator {
             "    }",
             "}",
         ]
-        lines += arrayCodec(for: methodTypes, owner: name)
+        lines += collectionCodecs(for: methodTypes, owner: name)
         if methodTypes.contains(where: \.usesManualParcelableCodec) {
             lines += manualParcelableCodec(owner: name)
         }
-        if methodTypes.contains(where: \.usesMapCodec) {
-            lines += mapCodec(owner: name)
+        return lines
+    }
+
+    private func collectionCodecs(for types: [WireType], owner: String) -> [String] {
+        var lines = arrayCodec(for: types, owner: owner)
+        if types.contains(where: \.usesMapCodec) {
+            lines += mapCodec(owner: owner)
         }
         return lines
     }
@@ -462,19 +467,6 @@ struct AIDLSwiftGenerator {
         if let reference = referenceType(type) {
             if annotations.isEmpty || nullable { return .reference(reference, nullable: nullable) }
         }
-        if type.name == "Map", type.arrayDimensions == 0, type.typeArguments.count == 2,
-           type.typeArguments[0].name == "String", type.typeArguments.allSatisfy(isPlain), annotations.isEmpty || nullable {
-            let owner = file.declarations[0].name
-            let valueType = type.typeArguments[1]
-            if valueType.name == "String" {
-                return .stringMap(.string, codec: owner + "MapCodec", nullable: nullable)
-            }
-            if let qualifiedName = try? resolver.resolveName(valueType.name, in: file, scope: [owner]),
-               let symbol = resolver.symbols[qualifiedName], try validateTypedObject(symbol) {
-                let swiftName = try swiftDeclarationName(symbol.declaration.name, qualifiedName: qualifiedName, context: context)
-                return .stringMap(.parcelable(swiftName, qualifiedName), codec: owner + "MapCodec", nullable: nullable)
-            }
-        }
         if annotations.isEmpty || nullable,
            let collection = try collectionWireType(
                type, in: file, owner: file.declarations[0].name, nullable: nullable, context: context
@@ -509,6 +501,20 @@ struct AIDLSwiftGenerator {
         _ type: AIDLType, in file: AIDLFile, owner: String, nullable: Bool,
         context: String, ancestors: Set<String>? = nil
     ) throws -> WireType? {
+        if type.name == "Map", type.arrayDimensions == 0, type.typeArguments.count == 2,
+           type.typeArguments[0].name == "String", type.typeArguments.allSatisfy(isPlain) {
+            let valueType = type.typeArguments[1]
+            let codec = owner + "MapCodec"
+            if valueType.name == "String" {
+                return .stringMap(.string, codec: codec, nullable: nullable)
+            }
+            if let name = try? resolver.resolveName(valueType.name, in: file, scope: [owner]),
+               let symbol = resolver.symbols[name], try validateTypedObject(symbol, ancestors: ancestors ?? []) {
+                let swiftName = try collectionDeclarationName(symbol, owner: owner, context: context, ancestors: ancestors)
+                return .stringMap(.parcelable(swiftName, name), codec: codec, nullable: nullable)
+            }
+            return nil
+        }
         guard let elementName = collectionElementName(type) else { return nil }
         let codec = owner + "ArrayCodec"
         if elementName == "String" {
@@ -534,15 +540,20 @@ struct AIDLSwiftGenerator {
             backing = nil
         }
 
-        let swiftName = if ancestors == nil {
-            try swiftDeclarationName(symbol.declaration.name, qualifiedName: name, context: context)
-        } else {
-            try inlineDeclarationName(symbol, owner: owner, context: context)
-        }
+        let swiftName = try collectionDeclarationName(symbol, owner: owner, context: context, ancestors: ancestors)
         if let backing {
             return .enumArray(swiftName, qualifiedName: name, backing: backing, codec: codec, nullable: nullable)
         }
         return .parcelableCollection(swiftName, qualifiedName: name, codec: codec, nullable: nullable)
+    }
+
+    private func collectionDeclarationName(
+        _ symbol: AIDLSymbol, owner: String, context: String, ancestors: Set<String>?
+    ) throws -> String {
+        if ancestors != nil {
+            return try inlineDeclarationName(symbol, owner: owner, context: context)
+        }
+        return try swiftDeclarationName(symbol.declaration.name, qualifiedName: symbol.qualifiedName, context: context)
     }
 
     private func manualParcelableName(_ qualifiedName: String, context: String) throws -> String {
@@ -688,7 +699,7 @@ struct AIDLSwiftGenerator {
 
     private func inlineDeclarationName(_ symbol: AIDLSymbol, owner: String, context: String) throws -> String {
         let name = try identifier(symbol.declaration.name)
-        guard name != owner, name != owner + "ArrayCodec",
+        guard name != owner, name != owner + "ArrayCodec", name != owner + "MapCodec",
               symbol.qualifiedName == (symbol.sourceFile.packageName + [name]).joined(separator: ".") else {
             throw failure("unsupported Swift field type '\(symbol.qualifiedName)' in \(context)")
         }
@@ -828,7 +839,7 @@ struct AIDLSwiftGenerator {
         }
         lines += ["        }", "    }"]
         return lines + Self.typedObjectMethods + ["}"]
-            + arrayCodec(for: fields.map(\.field.wireType), owner: union.name)
+            + collectionCodecs(for: fields.map(\.field.wireType), owner: union.name)
     }
 
     private func generateParcelable(_ parcelable: AIDLParcelable) throws -> [String] {
@@ -892,7 +903,7 @@ struct AIDLSwiftGenerator {
                 "    }",
             ]
             return lines + Self.typedObjectMethods + ["}"]
-                + arrayCodec(for: fields.map(\.field.wireType), owner: parcelable.name)
+                + collectionCodecs(for: fields.map(\.field.wireType), owner: parcelable.name)
         }
         let payloadSizes = fields.compactMap { $0.field.variablePayloadSize(of: "self." + $0.name) }
         if payloadSizes.isEmpty {
@@ -1195,7 +1206,7 @@ struct AIDLSwiftGenerator {
             case .reference(.bytes, nullable: false): "[]"
             case let .enumeration(name, _, _): "\(escaped(name))(rawValue: 0)"
             case let .parcelable(name, _, nullable): nullable ? "nil" : "\(escaped(name))()"
-            case let .collection(_, nullable): nullable ? "nil" : "[]"
+            case let .collection(type, nullable): nullable ? "nil" : (type.usesMapCodec ? "[:]" : "[]")
             }
         }
 
