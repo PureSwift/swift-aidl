@@ -54,8 +54,16 @@ public struct AIDLParser {
         return value
     }
     private mutating func qualifiedName() throws -> [String] {
-        var parts = [try identifier()]
-        while consume(".") { parts.append(try identifier()) }
+        var parts: [String] = []
+        repeat {
+            // Built-in type spellings also appear in qualified AOSP names.
+            if ["String", "CharSequence", "IBinder", "FileDescriptor", "ParcelFileDescriptor", "List", "Map"].contains(current.text) {
+                parts.append(current.text)
+                index += 1
+            } else {
+                parts.append(try identifier())
+            }
+        } while consume(".")
         return parts
     }
 
@@ -149,10 +157,26 @@ public struct AIDLParser {
         }
         guard !oneway else { throw failure("oneway requires an interface or method") }
         if consume("parcelable") {
-            let name = try identifier()
-            if consume(";") { return .parcelable(AIDLParcelable(name: name, annotations: attrs, isOpaqueForwardDecl: true, fields: [], constants: [], nestedDeclarations: [])) }
+            let name = try qualifiedName().joined(separator: ".")
+            var typeParameters: [String] = []
+            if consume("<") {
+                repeat { typeParameters.append(try identifier()) } while consume(",")
+                try expect(">")
+            }
+            var backendNames: [String: AIDLToken] = [:]
+            while ["cpp_header", "ndk_header", "rust_type"].contains(current.text) {
+                let backend = current.text
+                index += 1
+                guard current.kind == .stringLiteral else { throw failure("expected string literal after '\(backend)'") }
+                backendNames[backend] = current
+                index += 1
+            }
+            if consume(";") {
+                return .parcelable(AIDLParcelable(name: name, annotations: attrs, isOpaqueForwardDecl: true, typeParameters: typeParameters, backendNames: backendNames, fields: [], constants: [], nestedDeclarations: []))
+            }
+            guard backendNames.isEmpty else { throw failure("expected ';' after parcelable backend declaration") }
             let members = try fieldsAndDeclarations()
-            return .parcelable(AIDLParcelable(name: name, annotations: attrs, isOpaqueForwardDecl: false, fields: members.0, constants: members.1, nestedDeclarations: members.2))
+            return .parcelable(AIDLParcelable(name: name, annotations: attrs, isOpaqueForwardDecl: false, typeParameters: typeParameters, backendNames: [:], fields: members.0, constants: members.1, nestedDeclarations: members.2))
         }
         if consume("union") {
             let name = try identifier()
