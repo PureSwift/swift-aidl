@@ -40,7 +40,7 @@ map to `[String?]?` and preserve null elements.
 Arrays and lists of generated parcelables and unions use Binder typed-object
 encoding. Their nullable forms also preserve null collections and elements.
 The generator emits `BinderParcelable` structs for
-structured parcelables with scalar, string, and byte-array fields. It supports
+structured parcelables with scalar, string, and primitive-array fields. It supports
 explicit defaults for integer and string expressions without named references,
 and for boolean literals. Missing trailing fields use the same defaults as the
 generated initializer. For a method
@@ -64,8 +64,8 @@ Parcelable enum fields and union enum variants use the scalar backing encoding.
 Parcelable fields can default to a named enum member and otherwise start at
 raw value zero.
 
-AIDL unions generate Swift enums with
-associated values. String and byte-array variants can be nullable.
+AIDL unions generate Swift enums with associated values. String and
+primitive-array variants can be nullable.
 The wire tag follows declaration order and only the active value is encoded.
 Generate imported unions separately alongside their interfaces.
 
