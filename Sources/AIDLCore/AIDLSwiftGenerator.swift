@@ -283,7 +283,7 @@ struct AIDLSwiftGenerator {
             "        var request = Parcel()",
             "        request.appendInterfaceToken(Self.descriptor)",
         ]
-        for (index, type) in method.parameters.enumerated() {
+        for (index, type) in method.parameters.enumerated() where !method.outOnlyParameters.contains(index) {
             lines.append("        \(type.write("argument\(index)", to: "request"))")
         }
         let code = "\(interfaceName)TransactionCode.\(escaped(method.name))"
@@ -295,17 +295,17 @@ struct AIDLSwiftGenerator {
                 "        var reader = reply.reader()",
                 "        try reader.readException()",
             ]
-            if !method.inoutParameters.isEmpty {
+            if !method.outputParameters.isEmpty {
                 if let result = method.result {
                     lines.append("        \(result.decode(from: "reader", binding: "result"))")
                 }
-                for index in method.inoutParameters {
+                for index in method.outputParameters {
                     lines.append("        \(method.parameters[index].decode(from: "reader", binding: "updated\(index)"))")
                     if method.fixedLengthParameters.contains(index) {
                         lines.append("        guard updated\(index).count == argument\(index).count else { throw BinderError.failedTransaction }")
                     }
                 }
-                for index in method.inoutParameters {
+                for index in method.outputParameters {
                     lines.append("        argument\(index) = updated\(index)")
                 }
                 if method.result != nil { lines.append("        return result") }
@@ -328,7 +328,11 @@ struct AIDLSwiftGenerator {
             "            try data.enforceInterface(Self.descriptor)",
         ]
         for (index, type) in method.parameters.enumerated() {
-            let mutable = method.inoutParameters.contains(index)
+            if method.outOnlyParameters.contains(index) {
+                lines.append("            var argument\(index): \(type.swiftType) = []")
+                continue
+            }
+            let mutable = method.outputParameters.contains(index)
             lines.append("            \(type.decode(from: "data", binding: "argument\(index)", mutable: mutable))")
             if method.fixedLengthParameters.contains(index) {
                 lines.append("            let count\(index) = argument\(index).count")
@@ -336,19 +340,19 @@ struct AIDLSwiftGenerator {
         }
         lines.append("            guard data.isAtEnd else { throw BinderError.failedTransaction }")
         let arguments = method.parameters.indices.map { index in
-            (method.inoutParameters.contains(index) ? "&" : "") + "argument\(index)"
+            (method.outputParameters.contains(index) ? "&" : "") + "argument\(index)"
         }.joined(separator: ", ")
         let call = "try await self.\(escaped(method.name))(\(arguments))"
         lines.append("            " + (method.result == nil ? call : "let result = " + call))
         if !method.isOneway {
-            for index in method.inoutParameters where method.fixedLengthParameters.contains(index) {
+            for index in method.outputParameters where method.fixedLengthParameters.contains(index) {
                 lines.append("            guard argument\(index).count == count\(index) else { throw BinderError.failedTransaction }")
             }
             lines.append("            reply.writeNoException()")
             if let result = method.result {
                 lines.append("            \(result.write("result", to: "reply"))")
             }
-            for index in method.inoutParameters {
+            for index in method.outputParameters {
                 lines.append("            \(method.parameters[index].write("argument\(index)", to: "reply"))")
             }
         }
@@ -379,26 +383,29 @@ struct AIDLSwiftGenerator {
         if isOneway, result != nil {
             throw failure("oneway \(context) must return void")
         }
-        var inoutParameters: [Int] = []
+        var outputParameters: [Int] = []
         var fixedLengthParameters: Set<Int> = []
+        var outOnlyParameters: Set<Int> = []
         let parameters = try method.parameters.enumerated().map { index, parameter in
             if parameter.direction != .in {
                 let isArray = parameter.type.arrayDimensions == 1 && parameter.type.typeArguments.isEmpty
                 let isList = parameter.type.name == "List" && parameter.type.arrayDimensions == 0
-                guard parameter.direction == .inoutDirection, !isOneway,
-                      isArray || isList,
+                guard !isOneway,
+                      (parameter.direction == .inoutDirection && (isArray || isList))
+                          || (parameter.direction == .out && isList),
                       parameter.type.annotations.isEmpty else {
                     throw failure("unsupported parameter direction for '\(parameter.name)' in \(context)")
                 }
-                inoutParameters.append(index)
+                outputParameters.append(index)
                 if isArray { fixedLengthParameters.insert(index) }
+                if parameter.direction == .out { outOnlyParameters.insert(index) }
             }
             return try wireType(parameter.type, context: context)
         }
         return Method(
             name: method.name, code: method.computedTransactionCode, parameters: parameters,
-            result: result, isOneway: isOneway, stubValue: nil, inoutParameters: inoutParameters,
-            fixedLengthParameters: fixedLengthParameters
+            result: result, isOneway: isOneway, stubValue: nil, outputParameters: outputParameters,
+            fixedLengthParameters: fixedLengthParameters, outOnlyParameters: outOnlyParameters
         )
     }
 
@@ -900,12 +907,13 @@ struct AIDLSwiftGenerator {
         let result: WireType?
         let isOneway: Bool
         let stubValue: String?
-        var inoutParameters: [Int] = []
+        var outputParameters: [Int] = []
         var fixedLengthParameters: Set<Int> = []
+        var outOnlyParameters: Set<Int> = []
 
         var signature: String {
             let inputs = parameters.enumerated().map { index, type in
-                "_ argument\(index): \(inoutParameters.contains(index) ? "inout " : "")\(type.swiftType)"
+                "_ argument\(index): \(outputParameters.contains(index) ? "inout " : "")\(type.swiftType)"
             }
             let output = result.map { " -> \($0.swiftType)" } ?? ""
             return "func \(escaped(name))(\(inputs.joined(separator: ", "))) async throws\(output)"
