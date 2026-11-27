@@ -8,6 +8,7 @@ public enum `Choice`: BinderParcelable {
     case `data`([UInt8]?)
     case `mode`(`Mode`)
     case `flags`([Bool]?)
+    case `labels`([String?]?)
 
     public init() {
         self = .`number`(0)
@@ -28,6 +29,8 @@ public enum `Choice`: BinderParcelable {
             self = try .`mode`(`Mode`(rawValue: reader.readInt32()))
         case 5:
             self = try .`flags`(ChoiceArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readBool() }))
+        case 6:
+            self = try .`labels`(ChoiceArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readString() }))
         default:
             throw BinderError.failedTransaction
         }
@@ -53,6 +56,9 @@ public enum `Choice`: BinderParcelable {
         case let .`flags`(value):
             parcel.append(Int32(5))
             try ChoiceArrayCodec.write(value, to: &parcel) { $1.append($0) }
+        case let .`labels`(value):
+            parcel.append(Int32(6))
+            try ChoiceArrayCodec.write(value, to: &parcel) { if let value = $0 { $1.append(value) } else { $1.appendNullString() } }
         }
     }
 
