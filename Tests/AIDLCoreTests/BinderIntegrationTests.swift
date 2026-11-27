@@ -16,6 +16,7 @@ import Testing
         interface IInout {
             int update(inout int[] values, inout byte[] bytes);
             void updateObjects(inout String[] labels, inout Chunk[] chunks, inout Mode[] modes);
+            void updateLists(inout List<String> labels, inout List<Chunk> chunks);
         }
         """.write(to: path, atomically: true, encoding: .utf8)
     try "package demo; parcelable Chunk { int id; long count; boolean complete; }"
@@ -41,6 +42,9 @@ import Testing
     #expect(labels == ["", "A😀"])
     #expect(chunks.map(\.id) == [2, 1])
     #expect(modes == [unknownMode, .RUNNING])
+    try await proxy.updateLists(&labels, &chunks)
+    #expect(labels == ["", "A😀", "new"])
+    #expect(chunks.map(\.id) == [1])
 
     let malformed = IInoutProxy(remote: InvalidInoutReply())
     await #expect(throws: BinderError.failedTransaction) {
@@ -76,6 +80,11 @@ private final class InoutService: IInoutStub, @unchecked Sendable {
         labels.reverse()
         chunks.reverse()
         modes.reverse()
+    }
+
+    override func updateLists(_ labels: inout [String], _ chunks: inout [Chunk]) async throws {
+        labels.append("new")
+        if !chunks.isEmpty { chunks.removeFirst() }
     }
 }
 
