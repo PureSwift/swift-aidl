@@ -39,6 +39,7 @@ Two-way methods support non-nullable primitive, string, enum, and parcelable
 arrays as `inout` parameters.
 Their lengths stay fixed for the call, and the caller receives updates after
 the reply has been decoded.
+Non-nullable `inout List<String>` and typed-object lists can also change length.
 `String[]` and `List<String>` map to `[String]`. Their `@nullable` forms
 map to `[String?]?` and preserve null elements.
 Arrays and lists of generated parcelables and unions use Binder typed-object
