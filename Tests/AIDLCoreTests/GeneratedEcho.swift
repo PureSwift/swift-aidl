@@ -27,6 +27,7 @@ public protocol `IEcho`: BinderInterface {
     func `echoModes`(_ argument0: [`Mode`]?) async throws -> [`Mode`]?
     func `echoByteModes`(_ argument0: [`ByteMode`]) async throws -> [`ByteMode`]
     func `echoEnumFields`(_ argument0: `EnumFields`) async throws -> `EnumFields`
+    func `echoNested`(_ argument0: `Nested`) async throws -> `Nested`
     func `getInterfaceVersion`() async throws -> Int32
     func `getInterfaceHash`() async throws -> String
 }
@@ -66,6 +67,7 @@ public enum IEchoTransactionCode {
     public static let `echoModes`: UInt32 = 23
     public static let `echoByteModes`: UInt32 = 24
     public static let `echoEnumFields`: UInt32 = 25
+    public static let `echoNested`: UInt32 = 26
     public static let `getInterfaceVersion`: UInt32 = 16777215
     public static let `getInterfaceHash`: UInt32 = 16777214
 }
@@ -351,6 +353,16 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         return try `EnumFields`.readTypedObject(from: &reader)
     }
 
+    public func `echoNested`(_ argument0: `Nested`) async throws -> `Nested` {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try argument0.writeTypedObject(to: &request)
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoNested`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try `Nested`.readTypedObject(from: &reader)
+    }
+
     public func `getInterfaceVersion`() async throws -> Int32 {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
@@ -476,6 +488,10 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoEnumFields`(_ argument0: `EnumFields`) async throws -> `EnumFields` {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoEnumFields`)
+    }
+
+    open func `echoNested`(_ argument0: `Nested`) async throws -> `Nested` {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoNested`)
     }
 
     open func `getInterfaceVersion`() async throws -> Int32 {
@@ -687,6 +703,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let argument0 = try `EnumFields`.readTypedObject(from: &data)
             guard data.isAtEnd else { throw BinderError.failedTransaction }
             let result = try await self.`echoEnumFields`(argument0)
+            reply.writeNoException()
+            try result.writeTypedObject(to: &reply)
+            return true
+        case IEchoTransactionCode.`echoNested`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try `Nested`.readTypedObject(from: &data)
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoNested`(argument0)
             reply.writeNoException()
             try result.writeTypedObject(to: &reply)
             return true
