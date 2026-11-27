@@ -33,6 +33,8 @@ import Testing
             char[] echoChars(in char[] value);
             float[] echoFloats(in float[] value);
             @nullable double[] echoDoubles(in @nullable double[] value);
+            String[] echoTexts(in String[] value);
+            @nullable List<String> echoOptionalTexts(in @nullable List<String> value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -156,6 +158,11 @@ import Testing
     let doubles: [Double] = [-0.0, Double(bitPattern: 0x7FF8_0000_0000_1234), -.infinity]
     #expect(try await proxy.echoDoubles(doubles)?.map(\.bitPattern) == doubles.map(\.bitPattern))
     #expect(try await proxy.echoDoubles(nil) == nil)
+    #expect(try await proxy.echoTexts(["", "A😀", "binder"]) == ["", "A😀", "binder"])
+    #expect(try await proxy.echoTexts([]).isEmpty)
+    #expect(try await proxy.echoOptionalTexts(["A😀", nil, ""]) == ["A😀", nil, ""])
+    #expect(try await proxy.echoOptionalTexts([]) == [])
+    #expect(try await proxy.echoOptionalTexts(nil) == nil)
 
     var truncated = Parcel()
     truncated.appendInterfaceToken(IEchoProxy.descriptor)
@@ -163,6 +170,14 @@ import Testing
     truncated.append(Int32(42))
     await #expect(throws: ParcelError.endOfParcel) {
         try await stub.transact(code: IEchoTransactionCode.echoInts, data: truncated, flags: [])
+    }
+
+    var invalidStringArray = Parcel()
+    invalidStringArray.appendInterfaceToken(IEchoProxy.descriptor)
+    invalidStringArray.append(Int32(1))
+    invalidStringArray.appendNullString()
+    await #expect(throws: ParcelError.invalidLength(-1)) {
+        try await stub.transact(code: IEchoTransactionCode.echoTexts, data: invalidStringArray, flags: [])
     }
 
     var invalidRequest = Parcel()
@@ -423,4 +438,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoFloats(_ value: [Float]) async throws -> [Float] { value }
 
     override func echoDoubles(_ value: [Double]?) async throws -> [Double]? { value }
+
+    override func echoTexts(_ value: [String]) async throws -> [String] { value }
+
+    override func echoOptionalTexts(_ value: [String?]?) async throws -> [String?]? { value }
 }
