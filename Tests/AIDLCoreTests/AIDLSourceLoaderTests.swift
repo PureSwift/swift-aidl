@@ -12,7 +12,7 @@ import AIDLCore
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try contents.write(to: url, atomically: true, encoding: .utf8)
     }
-    try write("Root.aidl", "package demo; import demo.Item; interface Root {}")
+    try write("Root.aidl", "package demo; import demo.Item; interface Root { List<Item> getItems(); }")
     try write("overlay/demo/Item.aidl", "package demo; import demo.Other; parcelable Item { int value; }")
     try write("upstream/demo/Item.aidl", "package demo; parcelable Item;")
     try write("upstream/demo/Other.aidl", "package demo; import demo.Item; parcelable Other;")
@@ -25,8 +25,20 @@ import AIDLCore
     }
     #expect(!item.isOpaqueForwardDecl)
     #expect(item.fields.first?.name == "value")
-    let analyzed = try AIDLCompiler().analyze(sourcePath: root.appendingPathComponent("Root.aidl").path, includePaths: [overlay.path, upstream.path])
+    let source = root.appendingPathComponent("Root.aidl").path
+    let compiler = AIDLCompiler()
+    let analyzed = try compiler.analyze(sourcePath: source, includePaths: [overlay.path, upstream.path], manualParcelables: [])
     #expect(analyzed.files.count == 3)
+    #expect(analyzed.referencedOpaqueParcelables.isEmpty)
+
+    do {
+        _ = try compiler.analyze(sourcePath: source, includePaths: [upstream.path], manualParcelables: [])
+        Issue.record("Expected a missing parcelable layout")
+    } catch let error as AIDLParcelableLayoutError {
+        #expect(error.missingTypes == ["demo.Item"])
+    }
+    let registered = try compiler.analyze(sourcePath: source, includePaths: [upstream.path], manualParcelables: ["demo.Item"])
+    #expect(registered.referencedOpaqueParcelables == ["demo.Item"])
 }
 
 @Test func reportsMissingAndMismatchedImports() throws {
