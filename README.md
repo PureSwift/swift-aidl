@@ -5,7 +5,7 @@ A Swift package for parsing AIDL and generating Swift Binder bindings.
 The package currently provides an initial lexer and parser alongside scaffolding:
 
 - `AIDLCore`: the parser, type resolver, and initial integer expression evaluator.
-- `aidl-swift`: a command-line frontend with `parse` and `check` commands.
+- `aidl-swift`: a command-line frontend with `parse`, `check`, and `generate` commands.
 - `AIDLPlugin`: the future SwiftPM build tool plugin.
 
 Run `aidl-swift check -I <include-directory> <source.aidl>` to parse a source
@@ -18,7 +18,19 @@ For code generation preflight, pass `manualParcelables` to
 parcelables then require either a structured declaration in the include roots
 or a registered manual implementation.
 
-The parser covers core declarations, but complete AIDL syntax and semantic validation, code generation, Java parcelable extraction, and plugin integration are not implemented yet.
+## Swift bindings
+
+```sh
+swift run aidl-swift generate -o IEcho.swift IEcho.aidl
+```
+
+The generator emits a Swift protocol, proxy, stub, and transaction codes for
+one interface. It supports scalar input parameters and return values
+(`byte`, `int`, `long`, `boolean`, `char`, `float`, and `double`), `void`
+methods, and one-way calls. Compile the output in a target that depends on
+`Binder` 0.2.1.
+
+Parcelables, callbacks, and SwiftPM plugin integration are pending.
 
 ## AOSP parser corpus
 
