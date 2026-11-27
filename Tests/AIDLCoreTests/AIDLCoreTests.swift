@@ -13,6 +13,7 @@ import Testing
     "interface Example { @nullable void first(); }",
     "parcelable Example { byte value = 128; }",
     "parcelable Example { @nullable Example child; }",
+    "union Example { int zero; @nullable Example child; }",
 ])
 func rejectsUnsupportedSwiftGeneration(_ source: String) throws {
     let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
