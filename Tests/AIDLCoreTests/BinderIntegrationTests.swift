@@ -9,6 +9,7 @@ import Testing
         import demo.Chunk;
         import demo.Choice;
         import demo.Mode;
+        import demo.ByteMode;
         interface IEcho {
             const String LABEL = "swift " + (WORD + "!");
             const String WORD = "binder";
@@ -37,6 +38,8 @@ import Testing
             @nullable List<String> echoOptionalTexts(in @nullable List<String> value);
             Chunk[] echoChunks(in Chunk[] value);
             @nullable List<Chunk> echoOptionalChunks(in @nullable List<Chunk> value);
+            @nullable Mode[] echoModes(in @nullable Mode[] value);
+            ByteMode[] echoByteModes(in ByteMode[] value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -70,6 +73,11 @@ import Testing
             @nullable byte[] data;
         }
         """.write(to: choice, atomically: true, encoding: .utf8)
+    let byteMode = package.appendingPathComponent("ByteMode.aidl")
+    try """
+        package demo;
+        enum ByteMode { NONE, HIGH = -7 }
+        """.write(to: byteMode, atomically: true, encoding: .utf8)
 
     // Compile a checked-in copy of the generated source as part of this test target.
     let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -79,6 +87,7 @@ import Testing
         (chunk, "GeneratedChunk.swift"),
         (mode, "GeneratedMode.swift"),
         (choice, "GeneratedChoice.swift"),
+        (byteMode, "GeneratedByteMode.swift"),
     ] {
         let emitted = try compiler.compile(
             sourcePath: source.path, includePaths: [directory.path],
@@ -172,6 +181,16 @@ import Testing
     let optionalChunks = try #require(await proxy.echoOptionalChunks([nil, Chunk(id: 3), nil]))
     #expect(optionalChunks.map { $0?.id } == [nil, 3, nil])
     #expect(try await proxy.echoOptionalChunks(nil) == nil)
+    let unknownMode = Mode(rawValue: .max)
+    #expect(try await proxy.echoModes([.IDLE, unknownMode]) == [.IDLE, unknownMode])
+    #expect(try await proxy.echoModes(nil) == nil)
+    #expect(try await proxy.echoByteModes([.HIGH, ByteMode(rawValue: .min)]) == [.HIGH, ByteMode(rawValue: .min)])
+
+    var byteModes = Parcel()
+    byteModes.appendInterfaceToken(IEchoProxy.descriptor)
+    byteModes.append(bytes: [0xF9, 0x80, 0])
+    let byteReply = try await stub.transact(code: IEchoTransactionCode.echoByteModes, data: byteModes, flags: [])
+    #expect(byteReply.bytes == [0, 0, 0, 0, 3, 0, 0, 0, 0xF9, 0x80, 0, 0])
 
     var truncated = Parcel()
     truncated.appendInterfaceToken(IEchoProxy.descriptor)
@@ -463,4 +482,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoChunks(_ value: [Chunk]) async throws -> [Chunk] { value }
 
     override func echoOptionalChunks(_ value: [Chunk?]?) async throws -> [Chunk?]? { value }
+
+    override func echoModes(_ value: [Mode]?) async throws -> [Mode]? { value }
+
+    override func echoByteModes(_ value: [ByteMode]) async throws -> [ByteMode] { value }
 }
