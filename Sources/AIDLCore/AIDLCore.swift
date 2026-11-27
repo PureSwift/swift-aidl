@@ -35,12 +35,13 @@ public struct AIDLCompiler: Sendable {
         includePaths: [String] = [],
         preprocessedPaths: [String] = [],
         interfaceVersion: Int32? = nil,
-        interfaceHash: String? = nil
+        interfaceHash: String? = nil,
+        manualParcelables: Set<String> = []
     ) throws -> String {
         let graph = try analyze(sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths)
         return try AIDLSwiftGenerator(
             file: graph.files[0], resolver: AIDLTypeResolver(graph: graph), integerConstants: graph.integerConstants,
-            interfaceVersion: interfaceVersion, interfaceHash: interfaceHash
+            interfaceVersion: interfaceVersion, interfaceHash: interfaceHash, manualParcelables: manualParcelables
         ).generate()
     }
 }
