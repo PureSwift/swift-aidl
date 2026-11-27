@@ -7,6 +7,7 @@ public protocol `IEcho`: BinderInterface {
     func `scale`(_ argument0: Float, _ argument1: Double) async throws -> Double
     func `matches`(_ argument0: Int8, _ argument1: UInt16) async throws -> Bool
     func `roundTrip`(_ argument0: `Chunk`) async throws -> `Chunk`
+    func `roundTripOptional`(_ argument0: `Chunk`?) async throws -> `Chunk`?
     func `echoText`(_ argument0: String) async throws -> String
     func `echoOptionalText`(_ argument0: String?) async throws -> String?
     func `echoBytes`(_ argument0: [UInt8]) async throws -> [UInt8]
@@ -23,10 +24,11 @@ public enum IEchoTransactionCode {
     public static let `scale`: UInt32 = 3
     public static let `matches`: UInt32 = 4
     public static let `roundTrip`: UInt32 = 5
-    public static let `echoText`: UInt32 = 6
-    public static let `echoOptionalText`: UInt32 = 7
-    public static let `echoBytes`: UInt32 = 8
-    public static let `echoOptionalBytes`: UInt32 = 9
+    public static let `roundTripOptional`: UInt32 = 6
+    public static let `echoText`: UInt32 = 7
+    public static let `echoOptionalText`: UInt32 = 8
+    public static let `echoBytes`: UInt32 = 9
+    public static let `echoOptionalBytes`: UInt32 = 10
 }
 
 public struct IEchoProxy: `IEcho`, BinderProxy {
@@ -83,6 +85,16 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         var reader = reply.reader()
         try reader.readException()
         return try `Chunk`.readTypedObject(from: &reader)
+    }
+
+    public func `roundTripOptional`(_ argument0: `Chunk`?) async throws -> `Chunk`? {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        if let value = argument0 { try value.writeTypedObject(to: &request) } else { request.append(Int32(0)) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`roundTripOptional`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try `Chunk`.readNullableTypedObject(from: &reader)
     }
 
     public func `echoText`(_ argument0: String) async throws -> String {
@@ -155,6 +167,10 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`roundTrip`)
     }
 
+    open func `roundTripOptional`(_ argument0: `Chunk`?) async throws -> `Chunk`? {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`roundTripOptional`)
+    }
+
     open func `echoText`(_ argument0: String) async throws -> String {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoText`)
     }
@@ -214,6 +230,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`roundTrip`(argument0)
             reply.writeNoException()
             try result.writeTypedObject(to: &reply)
+            return true
+        case IEchoTransactionCode.`roundTripOptional`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try `Chunk`.readNullableTypedObject(from: &data)
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`roundTripOptional`(argument0)
+            reply.writeNoException()
+            if let value = result { try value.writeTypedObject(to: &reply) } else { reply.append(Int32(0)) }
             return true
         case IEchoTransactionCode.`echoText`:
             try data.enforceInterface(Self.descriptor)
