@@ -153,7 +153,43 @@ struct AIDLSwiftGenerator {
             "    }",
             "}",
         ]
+        if methods.contains(where: { method in
+            method.result?.usesArrayCodec == true || method.parameters.contains(where: \.usesArrayCodec)
+        }) {
+            lines += arrayCodec(named: name + "ArrayCodec")
+        }
         return lines
+    }
+
+    private func arrayCodec(named name: String) -> [String] {
+        [
+            "",
+            "private enum \(name) {",
+            "    static func read<Element>(",
+            "        from reader: inout Parcel.Reader, elementSize: Int,",
+            "        readElement: (inout Parcel.Reader) throws -> Element",
+            "    ) throws -> [Element]? {",
+            "        let count = try reader.readInt32()",
+            "        if count == -1 { return nil }",
+            "        guard count >= 0 else { throw ParcelError.invalidLength(count) }",
+            "        guard Int(count) <= reader.remaining / elementSize else { throw ParcelError.endOfParcel }",
+            "        return try (0..<Int(count)).map { _ in try readElement(&reader) }",
+            "    }",
+            "",
+            "    static func write<Element>(",
+            "        _ values: [Element]?, to parcel: inout Parcel,",
+            "        writeElement: (Element, inout Parcel) -> Void",
+            "    ) throws {",
+            "        guard let values else {",
+            "            parcel.append(Int32(-1))",
+            "            return",
+            "        }",
+            "        guard let count = Int32(exactly: values.count) else { throw BinderError.failedTransaction }",
+            "        parcel.append(count)",
+            "        for value in values { writeElement(value, &parcel) }",
+            "    }",
+            "}",
+        ]
     }
 
     private func generateInterfaceConstants(_ interface: AIDLInterface, methodNames: Set<String>) throws -> [String] {
@@ -299,13 +335,17 @@ struct AIDLSwiftGenerator {
         if let reference = referenceType(type) {
             if annotations.isEmpty || nullable { return .reference(reference, nullable: nullable) }
         }
+        if type.arrayDimensions == 1, type.typeArguments.isEmpty, annotations.isEmpty || nullable,
+           let scalar = Scalar(rawValue: type.name), scalar == .int || scalar == .long {
+            return .integralArray(scalar, codec: file.declarations[0].name + "ArrayCodec", nullable: nullable)
+        }
         if type.arrayDimensions == 0, type.typeArguments.isEmpty, annotations.isEmpty || nullable {
             if annotations.isEmpty, let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
             let resolved = try resolver.resolve(type, in: file, scope: [file.declarations[0].name])
             if case let .declaration(name) = resolved.target, let declaration = resolver.symbols[name]?.declaration {
                 let swiftName = try identifier(declaration.name)
                 let owner = file.declarations[0].name
-                guard ![owner, owner + "Proxy", owner + "Stub", owner + "TransactionCode"].contains(swiftName) else {
+                guard ![owner, owner + "Proxy", owner + "Stub", owner + "TransactionCode", owner + "ArrayCodec"].contains(swiftName) else {
                     throw failure("Swift name collision for '\(name)' in \(context)")
                 }
                 switch declaration {
@@ -617,6 +657,7 @@ struct AIDLSwiftGenerator {
     private enum WireType {
         case scalar(Scalar)
         case reference(Reference, nullable: Bool)
+        case integralArray(Scalar, codec: String, nullable: Bool)
         case parcelable(String, qualifiedName: String, nullable: Bool)
         case enumeration(String, qualifiedName: String, backing: Scalar)
 
@@ -629,7 +670,14 @@ struct AIDLSwiftGenerator {
         }
 
         var requiresNonNullRead: Bool {
-            if case .reference(_, nullable: false) = self { return true }
+            switch self {
+            case .reference(_, nullable: false), .integralArray(_, _, nullable: false): true
+            default: false
+            }
+        }
+
+        var usesArrayCodec: Bool {
+            if case .integralArray = self { return true }
             return false
         }
 
@@ -637,6 +685,7 @@ struct AIDLSwiftGenerator {
             switch self {
             case let .scalar(type): type.swiftType
             case let .reference(type, nullable): type.swiftType + (nullable ? "?" : "")
+            case let .integralArray(type, _, nullable): "[\(type.swiftType)]" + (nullable ? "?" : "")
             case let .parcelable(name, _, nullable): escaped(name) + (nullable ? "?" : "")
             case let .enumeration(name, _, _): escaped(name)
             }
@@ -646,6 +695,8 @@ struct AIDLSwiftGenerator {
             switch self {
             case let .scalar(type): type.read(from: reader)
             case let .reference(type, _): "\(reader).\(type.readMethod)()"
+            case let .integralArray(type, codec, _):
+                "\(codec).read(from: &\(reader), elementSize: \(type.wireSize), readElement: { try \(type.read(from: "$0")) })"
             case let .parcelable(name, _, nullable):
                 "\(escaped(name)).\(nullable ? "readNullableTypedObject" : "readTypedObject")(from: &\(reader))"
             case let .enumeration(name, _, backing):
@@ -667,6 +718,8 @@ struct AIDLSwiftGenerator {
             case let .reference(type, nullable: false): "\(parcel).\(type.append(value))"
             case let .reference(type, nullable: true):
                 "if let value = \(value) { \(parcel).\(type.append("value")) } else { \(parcel).\(type.appendNullMethod)() }"
+            case let .integralArray(type, codec, _):
+                "try \(codec).write(\(value), to: &\(parcel)) { $1.\(type.append("$0")) }"
             case .parcelable(_, _, nullable: false): "try \(value).writeTypedObject(to: &\(parcel))"
             case .parcelable(_, _, nullable: true):
                 "if let value = \(value) { try value.writeTypedObject(to: &\(parcel)) } else { \(parcel).append(Int32(0)) }"
