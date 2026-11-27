@@ -33,7 +33,8 @@ It supports scalar input parameters and return values
 methods, and one-way calls. Interface methods also support `String` and
 `@nullable String` inputs and results using Binder's UTF-16 string encoding.
 `byte[]` and `@nullable byte[]` map to `[UInt8]` and `[UInt8]?`.
-Interface methods also support `int[]` and `long[]`, including nullable variants.
+Interface methods support arrays of all primitive types listed above,
+including nullable arrays.
 The generator emits `BinderParcelable` structs for
 structured parcelables with scalar, string, and byte-array fields. It supports
 explicit defaults for integer and string expressions without named references,
