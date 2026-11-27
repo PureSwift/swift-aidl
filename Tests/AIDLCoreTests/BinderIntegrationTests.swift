@@ -77,6 +77,7 @@ import Testing
             String text;
             @nullable byte[] data;
             Mode mode;
+            @nullable boolean[] flags;
         }
         """.write(to: choice, atomically: true, encoding: .utf8)
     let containerChoice = package.appendingPathComponent("ContainerChoice.aidl")
@@ -317,7 +318,7 @@ import Testing
     #expect(parcel.bytes == [1, 0, 0, 0, 1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0])
 
     var invalid = Parcel()
-    invalid.append(Int32(5))
+    invalid.append(Int32(6))
     var reader = invalid.reader()
     #expect(throws: BinderError.failedTransaction) {
         try Choice(from: &reader)
@@ -334,6 +335,50 @@ import Testing
     #expect(throws: ParcelError.invalidLength(-1)) {
         try Choice(from: &invalidTextReader)
     }
+
+    var flags = Parcel()
+    try Choice.flags([true, false]).write(to: &flags)
+    #expect(flags.bytes == [5, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+}
+
+@Test func generatedParcelableArrayFieldsRespectFrameBounds() throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try """
+        package demo;
+        parcelable ArrayFields {
+            int[] values;
+            @nullable long[] optionalValues;
+            int tail;
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedArrayFields.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+
+    var parcel = Parcel()
+    try ArrayFields(values: [.min, .max], optionalValues: [.min], tail: 42).write(to: &parcel)
+    #expect(parcel.bytes.count == 32)
+    parcel.append(Int32(99))
+    var reader = parcel.reader()
+    let fields = try ArrayFields(from: &reader)
+    #expect(fields.values == [Int32.min, Int32.max])
+    #expect(fields.optionalValues == [Int64.min] && fields.tail == 42)
+    #expect(try reader.readInt32() == 99)
+
+    var older = Parcel()
+    older.append(Int32(4))
+    var oldReader = older.reader()
+    let defaults = try ArrayFields(from: &oldReader)
+    #expect(defaults.values.isEmpty && defaults.optionalValues == nil)
+
+    var malformed = Parcel()
+    malformed.append(Int32(8))
+    malformed.append(Int32(1))
+    malformed.append(Int32(99))
+    var malformedReader = malformed.reader()
+    #expect(throws: ParcelError.endOfParcel) { try ArrayFields(from: &malformedReader) }
+    #expect(try malformedReader.readInt32() == 99)
 }
 
 @Test func generatedNestedUnionsPreserveTagsAndPresenceMarkers() throws {
