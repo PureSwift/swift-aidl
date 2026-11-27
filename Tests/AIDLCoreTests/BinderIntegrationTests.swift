@@ -56,6 +56,8 @@ import Testing
         union Choice {
             int number;
             long big;
+            String text;
+            @nullable byte[] data;
         }
         """.write(to: choice, atomically: true, encoding: .utf8)
 
@@ -128,6 +130,15 @@ import Testing
     }
     #expect(big == Int64.min)
     #expect(number == -7)
+    guard case let .text(text) = try await proxy.echoChoice(.text("A😀")),
+          case let .data(bytes) = try await proxy.echoChoice(.data([128, 255])),
+          case let .data(absent) = try await proxy.echoChoice(.data(nil)) else {
+        Issue.record("Expected the original reference union variants")
+        return
+    }
+    #expect(text == "A😀")
+    #expect(bytes == [128, 255])
+    #expect(absent == nil)
 
     var invalidRequest = Parcel()
     invalidRequest.appendInterfaceToken(IEchoProxy.descriptor)
@@ -158,10 +169,22 @@ import Testing
     #expect(parcel.bytes == [1, 0, 0, 0, 1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0])
 
     var invalid = Parcel()
-    invalid.append(Int32(2))
+    invalid.append(Int32(4))
     var reader = invalid.reader()
     #expect(throws: BinderError.failedTransaction) {
         try Choice(from: &reader)
+    }
+
+    var absent = Parcel()
+    try Choice.data(nil).writeTypedObject(to: &absent)
+    #expect(absent.bytes == [1, 0, 0, 0, 3, 0, 0, 0, 255, 255, 255, 255])
+
+    var invalidText = Parcel()
+    invalidText.append(Int32(2))
+    invalidText.appendNullString()
+    var invalidTextReader = invalidText.reader()
+    #expect(throws: ParcelError.invalidLength(-1)) {
+        try Choice(from: &invalidTextReader)
     }
 }
 
