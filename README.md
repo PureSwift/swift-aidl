@@ -6,7 +6,7 @@ The package currently provides an initial lexer and parser alongside scaffolding
 
 - `AIDLCore`: the parser, type resolver, and initial integer expression evaluator.
 - `aidl-swift`: a command-line frontend with `parse`, `check`, and `generate` commands.
-- `AIDLPlugin`: the future SwiftPM build tool plugin.
+- `AIDLPlugin`: a SwiftPM build tool plugin for generating bindings.
 
 Run `aidl-swift check -I <include-directory> <source.aidl>` to parse a source
 and its imports, resolve type references, and evaluate scalar `byte`, `int`,
@@ -33,7 +33,26 @@ that takes or returns a parcelable, generate the interface and the parcelable
 separately, passing the import root with `-I`. Compile both outputs in a target
 that depends on `Binder` 0.2.1.
 
-Callbacks and SwiftPM plugin integration are pending.
+### SwiftPM build tool plugin
+
+Add the `AIDLPlugin` plugin and the `Binder` product to the target that uses
+the generated bindings. Put `aidl-config.json` in that target's source directory.
+For example:
+
+```json
+{
+  "sources": ["AIDL/demo/IEcho.aidl", "AIDL/demo/Chunk.aidl"],
+  "includePaths": ["AIDL"]
+}
+```
+
+Paths are relative to the target's source directory. Use `preprocessedPaths`
+for optional SDK declaration files. List each declaration you want emitted
+under `sources` and use distinct filenames. Add `aidl-config.json` and `AIDL`
+to the target's `exclude` list so SwiftPM leaves them to the plugin. The plugin
+generates and compiles the Swift bindings during the build.
+
+Callback generation remains pending.
 
 ## AOSP parser corpus
 
