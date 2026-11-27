@@ -3,6 +3,7 @@ import Binder
 
 public protocol `IInout`: BinderInterface {
     func `update`(_ argument0: inout [Int32], _ argument1: inout [UInt8]) async throws -> Int32
+    func `updateObjects`(_ argument0: inout [String], _ argument1: inout [`Chunk`], _ argument2: inout [`Mode`]) async throws
 }
 
 public extension `IInout` {
@@ -11,6 +12,7 @@ public extension `IInout` {
 
 public enum IInoutTransactionCode {
     public static let `update`: UInt32 = 1
+    public static let `updateObjects`: UInt32 = 2
 }
 
 public struct IInoutProxy: `IInout`, BinderProxy {
@@ -53,6 +55,26 @@ public struct IInoutProxy: `IInout`, BinderProxy {
         argument1 = updated1
         return result
     }
+
+    public func `updateObjects`(_ argument0: inout [String], _ argument1: inout [`Chunk`], _ argument2: inout [`Mode`]) async throws {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IInoutArrayCodec.write(argument0, to: &request) { $1.append($0) }
+        try IInoutArrayCodec.write(argument1, to: &request) { try $0.writeTypedObject(to: &$1) }
+        try IInoutArrayCodec.write(argument2, to: &request) { $1.append($0.rawValue) }
+        let reply = try await remote.transact(code: IInoutTransactionCode.`updateObjects`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let updated0 = try IInoutArrayCodec.read(from: &reader, elementSize: 4, readElement: IInoutArrayCodec.readRequiredString) else { throw ParcelError.invalidLength(-1) }
+        guard updated0.count == argument0.count else { throw BinderError.failedTransaction }
+        guard let updated1 = try IInoutArrayCodec.read(from: &reader, elementSize: 4, readElement: `Chunk`.readTypedObject) else { throw ParcelError.invalidLength(-1) }
+        guard updated1.count == argument1.count else { throw BinderError.failedTransaction }
+        guard let updated2 = try IInoutArrayCodec.read(from: &reader, elementSize: 4, readElement: { try `Mode`(rawValue: $0.readInt32()) }) else { throw ParcelError.invalidLength(-1) }
+        guard updated2.count == argument2.count else { throw BinderError.failedTransaction }
+        argument0 = updated0
+        argument1 = updated1
+        argument2 = updated2
+    }
 }
 
 open class IInoutStub: BinderStub, `IInout`, @unchecked Sendable {
@@ -64,6 +86,10 @@ open class IInoutStub: BinderStub, `IInout`, @unchecked Sendable {
 
     open func `update`(_ argument0: inout [Int32], _ argument1: inout [UInt8]) async throws -> Int32 {
         throw BinderTransactionError.unknownTransaction(IInoutTransactionCode.`update`)
+    }
+
+    open func `updateObjects`(_ argument0: inout [String], _ argument1: inout [`Chunk`], _ argument2: inout [`Mode`]) async throws {
+        throw BinderTransactionError.unknownTransaction(IInoutTransactionCode.`updateObjects`)
     }
 
     public override func onTransact(
@@ -84,6 +110,24 @@ open class IInoutStub: BinderStub, `IInout`, @unchecked Sendable {
             reply.append(result)
             try IInoutArrayCodec.write(argument0, to: &reply) { $1.append($0) }
             reply.append(bytes: argument1)
+            return true
+        case IInoutTransactionCode.`updateObjects`:
+            try data.enforceInterface(Self.descriptor)
+            guard var argument0 = try IInoutArrayCodec.read(from: &data, elementSize: 4, readElement: IInoutArrayCodec.readRequiredString) else { throw ParcelError.invalidLength(-1) }
+            let count0 = argument0.count
+            guard var argument1 = try IInoutArrayCodec.read(from: &data, elementSize: 4, readElement: `Chunk`.readTypedObject) else { throw ParcelError.invalidLength(-1) }
+            let count1 = argument1.count
+            guard var argument2 = try IInoutArrayCodec.read(from: &data, elementSize: 4, readElement: { try `Mode`(rawValue: $0.readInt32()) }) else { throw ParcelError.invalidLength(-1) }
+            let count2 = argument2.count
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            try await self.`updateObjects`(&argument0, &argument1, &argument2)
+            guard argument0.count == count0 else { throw BinderError.failedTransaction }
+            guard argument1.count == count1 else { throw BinderError.failedTransaction }
+            guard argument2.count == count2 else { throw BinderError.failedTransaction }
+            reply.writeNoException()
+            try IInoutArrayCodec.write(argument0, to: &reply) { $1.append($0) }
+            try IInoutArrayCodec.write(argument1, to: &reply) { try $0.writeTypedObject(to: &$1) }
+            try IInoutArrayCodec.write(argument2, to: &reply) { $1.append($0.rawValue) }
             return true
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)
@@ -114,5 +158,10 @@ private enum IInoutArrayCodec {
         guard let count = Int32(exactly: values.count) else { throw BinderError.failedTransaction }
         parcel.append(count)
         for value in values { try writeElement(value, &parcel) }
+    }
+
+    static func readRequiredString(from reader: inout Parcel.Reader) throws -> String {
+        guard let value = try reader.readString() else { throw ParcelError.invalidLength(-1) }
+        return value
     }
 }
