@@ -47,7 +47,7 @@ map to `[String?]?` and preserve null elements.
 Arrays and lists of generated parcelables and unions use Binder typed-object
 encoding. Their nullable forms also preserve null collections and elements.
 `Map<String, String>` and string-keyed maps of generated parcelables or
-unions map to Swift dictionaries in method parameters and results.
+unions map to Swift dictionaries in methods, parcelable fields, and union variants.
 The `@nullable` form allows a null map. Keys and values must be non-null.
 The generator emits `BinderParcelable` structs for
 structured parcelables with scalar, string, and primitive-array fields. It supports
