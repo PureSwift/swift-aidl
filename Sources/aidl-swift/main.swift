@@ -41,18 +41,21 @@ extension AIDLSwift {
 
     struct Check: ParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Parse an AIDL file and resolve its type references."
+            abstract: "Analyze AIDL imports, type references, and integer constants."
         )
 
         @Option(name: .customShort("I"), help: "Search this directory for imports, in the order specified.")
         var includePaths: [String] = []
 
+        @Option(name: .customShort("p"), help: "Read type declarations from a preprocessed AIDL file.")
+        var preprocessedPaths: [String] = []
+
         @Argument(help: "The root AIDL source file.")
         var sourcePath: String
 
         func run() throws {
-            let graph = try AIDLCompiler().analyze(sourcePath: sourcePath, includePaths: includePaths)
-            print("Parsed and resolved type references in \(graph.files.count) AIDL file(s).")
+            let graph = try AIDLCompiler().analyze(sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths)
+            print("Analyzed \(graph.files.count) AIDL file(s) and evaluated \(graph.integerConstants.count) integer constant(s).")
         }
     }
 }
