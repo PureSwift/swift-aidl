@@ -7,6 +7,7 @@ public enum `Choice`: BinderParcelable {
     case `text`(String)
     case `data`([UInt8]?)
     case `mode`(`Mode`)
+    case `flags`([Bool]?)
 
     public init() {
         self = .`number`(0)
@@ -25,6 +26,8 @@ public enum `Choice`: BinderParcelable {
             self = try .`data`(reader.readBytes())
         case 4:
             self = try .`mode`(`Mode`(rawValue: reader.readInt32()))
+        case 5:
+            self = try .`flags`(ChoiceArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readBool() }))
         default:
             throw BinderError.failedTransaction
         }
@@ -47,6 +50,9 @@ public enum `Choice`: BinderParcelable {
         case let .`mode`(value):
             parcel.append(Int32(4))
             parcel.append(value.rawValue)
+        case let .`flags`(value):
+            parcel.append(Int32(5))
+            try ChoiceArrayCodec.write(value, to: &parcel) { $1.append($0) }
         }
     }
 
@@ -63,5 +69,31 @@ public enum `Choice`: BinderParcelable {
     public func writeTypedObject(to parcel: inout Parcel) throws {
         parcel.append(Int32(1))
         try write(to: &parcel)
+    }
+}
+
+private enum ChoiceArrayCodec {
+    static func read<Element>(
+        from reader: inout Parcel.Reader, elementSize: Int,
+        readElement: (inout Parcel.Reader) throws -> Element
+    ) throws -> [Element]? {
+        let count = try reader.readInt32()
+        if count == -1 { return nil }
+        guard count >= 0 else { throw ParcelError.invalidLength(count) }
+        guard Int(count) <= reader.remaining / elementSize else { throw ParcelError.endOfParcel }
+        return try (0..<Int(count)).map { _ in try readElement(&reader) }
+    }
+
+    static func write<Element>(
+        _ values: [Element]?, to parcel: inout Parcel,
+        writeElement: (Element, inout Parcel) throws -> Void
+    ) throws {
+        guard let values else {
+            parcel.append(Int32(-1))
+            return
+        }
+        guard let count = Int32(exactly: values.count) else { throw BinderError.failedTransaction }
+        parcel.append(count)
+        for value in values { try writeElement(value, &parcel) }
     }
 }
