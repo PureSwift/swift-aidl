@@ -21,5 +21,8 @@ fetch() {
 }
 
 fetch frameworks/base '/core/java/**/*.aidl'
-fetch packages/modules/Wifi '/framework/java/**/*.aidl' '/aidl/**/*.aidl'
+fetch frameworks/libs/modules-utils '/java/**/*.aidl'
+fetch packages/modules/Wifi '/framework/java/**/*.aidl' '/framework/aidl-export/**/*.aidl' '/aidl/**/*.aidl'
 fetch packages/modules/Bluetooth '/android/app/aidl/**/*.aidl' '/framework/aidl-export/**/*.aidl' '/service/aidl/**/*.aidl'
+fetch packages/modules/Connectivity '/framework/aidl-export/**/*.aidl'
+fetch prebuilts/sdk '/current/public/framework.aidl'
