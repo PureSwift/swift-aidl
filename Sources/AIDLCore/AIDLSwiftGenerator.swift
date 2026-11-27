@@ -380,7 +380,7 @@ struct AIDLSwiftGenerator {
             if parameter.direction != .in {
                 guard parameter.direction == .inoutDirection, !isOneway,
                       parameter.type.arrayDimensions == 1, parameter.type.typeArguments.isEmpty,
-                      parameter.type.annotations.isEmpty, Scalar(rawValue: parameter.type.name) != nil else {
+                      parameter.type.annotations.isEmpty else {
                     throw failure("unsupported parameter direction for '\(parameter.name)' in \(context)")
                 }
                 inoutParameters.append(index)
