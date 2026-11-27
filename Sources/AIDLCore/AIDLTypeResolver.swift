@@ -2,6 +2,7 @@
 public struct AIDLSymbol: Equatable, Sendable {
     public let qualifiedName: String
     public let declaration: AIDLDeclaration
+    let sourceFile: AIDLFile
 }
 
 public enum AIDLTypeResolutionError: Error, Sendable, CustomStringConvertible {
@@ -54,12 +55,12 @@ public struct AIDLTypeResolver: Sendable {
     public init(graph: AIDLSourceGraph) throws {
         var index: [String: AIDLSymbol] = [:]
         for file in graph.files {
-            try Self.index(file.declarations, prefix: file.packageName, into: &index)
+            try Self.index(file.declarations, from: file, prefix: file.packageName, into: &index)
         }
         var preprocessed: [String: AIDLSymbol] = [:]
         for file in graph.preprocessedFiles {
             var fileIndex: [String: AIDLSymbol] = [:]
-            try Self.index(file.declarations, prefix: file.packageName, into: &fileIndex)
+            try Self.index(file.declarations, from: file, prefix: file.packageName, into: &fileIndex)
             preprocessed.merge(fileIndex) { existing, _ in existing }
         }
         preprocessedNames = Dictionary(grouping: preprocessed.keys) { name in
@@ -159,13 +160,16 @@ public struct AIDLTypeResolver: Sendable {
         throw AIDLTypeResolutionError.unresolvedType(name, sourcePath: file.sourcePath)
     }
 
-    private static func index(_ declarations: [AIDLDeclaration], prefix: [String], into symbols: inout [String: AIDLSymbol]) throws {
+    private static func index(
+        _ declarations: [AIDLDeclaration], from file: AIDLFile,
+        prefix: [String], into symbols: inout [String: AIDLSymbol]
+    ) throws {
         for declaration in declarations {
             let path = prefix + [declaration.name]
             let qualifiedName = path.joined(separator: ".")
             guard symbols[qualifiedName] == nil else { throw AIDLTypeResolutionError.duplicateSymbol(qualifiedName) }
-            symbols[qualifiedName] = AIDLSymbol(qualifiedName: qualifiedName, declaration: declaration)
-            try index(declaration.nestedDeclarations, prefix: path, into: &symbols)
+            symbols[qualifiedName] = AIDLSymbol(qualifiedName: qualifiedName, declaration: declaration, sourceFile: file)
+            try index(declaration.nestedDeclarations, from: file, prefix: path, into: &symbols)
         }
     }
 }
