@@ -37,6 +37,8 @@ Interface methods support arrays of all primitive types listed above,
 including nullable arrays.
 `String[]` and `List<String>` map to `[String]`. Their `@nullable` forms
 map to `[String?]?` and preserve null elements.
+Arrays and lists of generated parcelables and unions use Binder typed-object
+encoding. Their nullable forms also preserve null collections and elements.
 The generator emits `BinderParcelable` structs for
 structured parcelables with scalar, string, and byte-array fields. It supports
 explicit defaults for integer and string expressions without named references,
