@@ -93,7 +93,7 @@ public struct AIDLParser {
         guard current.kind == .identifier || current.kind == .keyword else { throw failure("expected type") }
         var name = current.text
         index += 1
-        while consume(".") { name += "." + (try identifier()) }
+        if consume(".") { name += "." + (try qualifiedName().joined(separator: ".")) }
         var arguments: [AIDLType] = []
         if consume("<") {
             repeat { arguments.append(try type()) } while consume(",")
