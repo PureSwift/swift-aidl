@@ -7,6 +7,7 @@ import Testing
     let source = """
         package demo;
         import demo.Chunk;
+        import demo.Choice;
         import demo.Mode;
         interface IEcho {
             int echo(int value);
@@ -20,6 +21,7 @@ import Testing
             byte[] echoBytes(in byte[] value);
             @nullable byte[] echoOptionalBytes(in @nullable byte[] value);
             Mode echoMode(Mode value);
+            Choice echoChoice(in Choice value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -43,6 +45,14 @@ import Testing
         @Backing(type="int")
         enum Mode { IDLE, RUNNING = 4, STOPPING }
         """.write(to: mode, atomically: true, encoding: .utf8)
+    let choice = package.appendingPathComponent("Choice.aidl")
+    try """
+        package demo;
+        union Choice {
+            int number;
+            long big;
+        }
+        """.write(to: choice, atomically: true, encoding: .utf8)
 
     // Compile a checked-in copy of the generated source as part of this test target.
     let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -51,6 +61,7 @@ import Testing
         (input, "GeneratedEcho.swift"),
         (chunk, "GeneratedChunk.swift"),
         (mode, "GeneratedMode.swift"),
+        (choice, "GeneratedChoice.swift"),
     ] {
         let emitted = try compiler.compile(sourcePath: source.path, includePaths: [directory.path])
         let fixture = fixtures.appendingPathComponent(fixtureName)
@@ -91,6 +102,13 @@ import Testing
     #expect(Mode.STOPPING.rawValue == 5)
     #expect(try await proxy.echoMode(.RUNNING) == .RUNNING)
     #expect(try await proxy.echoMode(Mode(rawValue: .min)).rawValue == Int32.min)
+    guard case let .big(big) = try await proxy.echoChoice(.big(.min)),
+          case let .number(number) = try await proxy.echoChoice(.number(-7)) else {
+        Issue.record("Expected the original union variants")
+        return
+    }
+    #expect(big == Int64.min)
+    #expect(number == -7)
 
     var invalidRequest = Parcel()
     invalidRequest.appendInterfaceToken(IEchoProxy.descriptor)
@@ -112,6 +130,19 @@ import Testing
     byteRequest.appendNullBytes()
     await #expect(throws: ParcelError.invalidLength(-1)) {
         try await stub.transact(code: IEchoTransactionCode.echoBytes, data: byteRequest, flags: [])
+    }
+}
+
+@Test func generatedUnionUsesDeclaredTagAndActivePayload() throws {
+    var parcel = Parcel()
+    try Choice.big(42).writeTypedObject(to: &parcel)
+    #expect(parcel.bytes == [1, 0, 0, 0, 1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0])
+
+    var invalid = Parcel()
+    invalid.append(Int32(2))
+    var reader = invalid.reader()
+    #expect(throws: BinderError.failedTransaction) {
+        try Choice(from: &reader)
     }
 }
 
@@ -217,4 +248,6 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoOptionalBytes(_ value: [UInt8]?) async throws -> [UInt8]? { value }
 
     override func echoMode(_ value: Mode) async throws -> Mode { value }
+
+    override func echoChoice(_ value: Choice) async throws -> Choice { value }
 }
