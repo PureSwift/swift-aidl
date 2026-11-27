@@ -137,7 +137,12 @@ struct AIDLSwiftGenerator {
                 "        try reader.readException()",
             ]
             if let result = method.result {
-                lines.append("        return try \(result.read(from: "reader"))")
+                if result.isRequiredString {
+                    lines.append("        \(result.decode(from: "reader", binding: "result"))")
+                    lines.append("        return result")
+                } else {
+                    lines.append("        return try \(result.read(from: "reader"))")
+                }
             }
         }
         lines.append("    }")
@@ -150,7 +155,7 @@ struct AIDLSwiftGenerator {
             "            try data.enforceInterface(Self.descriptor)",
         ]
         for (index, type) in method.parameters.enumerated() {
-            lines.append("            let argument\(index) = try \(type.read(from: "data"))")
+            lines.append("            \(type.decode(from: "data", binding: "argument\(index)"))")
         }
         lines.append("            guard data.isAtEnd else { throw BinderError.failedTransaction }")
         let arguments = method.parameters.indices.map { "argument\($0)" }.joined(separator: ", ")
@@ -169,7 +174,10 @@ struct AIDLSwiftGenerator {
     private func makeMethod(_ method: AIDLMethod, interfaceIsOneway: Bool) throws -> Method {
         let context = "method '\(method.name)'"
         _ = try identifier(method.name)
-        guard method.annotations.isEmpty else {
+        // The parser preserves annotations before the return type on the method.
+        let returnAnnotations = method.annotations + method.returnType.annotations
+        guard method.annotations.isEmpty ||
+              (method.returnType.name == "String" && isNullableAnnotation(returnAnnotations)) else {
             throw failure("Swift generation does not support annotations on \(context)")
         }
         // AOSP reserves the top 100 method IDs for compiler metadata.
@@ -181,7 +189,7 @@ struct AIDLSwiftGenerator {
         if method.returnType.name == "void", isPlain(method.returnType) {
             result = nil
         } else {
-            result = try wireType(method.returnType, context: context)
+            result = try wireType(method.returnType, leadingAnnotations: method.annotations, context: context)
         }
         let isOneway = interfaceIsOneway || method.isOneway
         if isOneway, result != nil {
@@ -196,7 +204,12 @@ struct AIDLSwiftGenerator {
         return Method(name: method.name, code: method.computedTransactionCode, parameters: parameters, result: result, isOneway: isOneway)
     }
 
-    private func wireType(_ type: AIDLType, context: String) throws -> WireType {
+    private func wireType(_ type: AIDLType, leadingAnnotations: [AIDLAnnotation] = [], context: String) throws -> WireType {
+        if type.name == "String", type.arrayDimensions == 0, type.typeArguments.isEmpty {
+            let annotations = leadingAnnotations + type.annotations
+            if annotations.isEmpty { return .string(nullable: false) }
+            if isNullableAnnotation(annotations) { return .string(nullable: true) }
+        }
         if isPlain(type) {
             if let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
             let resolved = try resolver.resolve(type, in: file, scope: [file.declarations[0].name])
@@ -213,6 +226,10 @@ struct AIDLSwiftGenerator {
             }
         }
         throw failure("unsupported Swift wire type '\(type.name)' in \(context)")
+    }
+
+    private func isNullableAnnotation(_ annotations: [AIDLAnnotation]) -> Bool {
+        annotations.count == 1 && annotations[0].name == "nullable" && annotations[0].arguments.isEmpty
     }
 
     private func parcelableFields(_ parcelable: AIDLParcelable) throws -> [(name: String, type: Scalar)] {
@@ -333,11 +350,18 @@ struct AIDLSwiftGenerator {
 
     private enum WireType {
         case scalar(Scalar)
+        case string(nullable: Bool)
         case parcelable(String, qualifiedName: String)
+
+        var isRequiredString: Bool {
+            if case .string(nullable: false) = self { return true }
+            return false
+        }
 
         var swiftType: String {
             switch self {
             case let .scalar(type): type.swiftType
+            case let .string(nullable): nullable ? "String?" : "String"
             case let .parcelable(name, _): escaped(name)
             }
         }
@@ -345,13 +369,25 @@ struct AIDLSwiftGenerator {
         func read(from reader: String) -> String {
             switch self {
             case let .scalar(type): type.read(from: reader)
+            case .string: "\(reader).readString()"
             case let .parcelable(name, _): "\(escaped(name)).readTypedObject(from: &\(reader))"
             }
+        }
+
+        func decode(from reader: String, binding: String) -> String {
+            let read = read(from: reader)
+            if isRequiredString {
+                return "guard let \(binding) = try \(read) else { throw ParcelError.invalidLength(-1) }"
+            }
+            return "let \(binding) = try \(read)"
         }
 
         func write(_ value: String, to parcel: String) -> String {
             switch self {
             case let .scalar(type): "\(parcel).\(type.append(value))"
+            case .string(nullable: false): "\(parcel).append(\(value))"
+            case .string(nullable: true):
+                "if let value = \(value) { \(parcel).append(value) } else { \(parcel).appendNullString() }"
             case .parcelable: "try \(value).writeTypedObject(to: &\(parcel))"
             }
         }
