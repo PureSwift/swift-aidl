@@ -30,6 +30,8 @@ public protocol `IEcho`: BinderInterface {
     func `echoNested`(_ argument0: `Nested`) async throws -> `Nested`
     func `echoStamp`(_ argument0: `ManualStamp`) async throws -> `ManualStamp`
     func `echoOptionalStamp`(_ argument0: `ManualStamp`?) async throws -> `ManualStamp`?
+    func `echoStamps`(_ argument0: [`ManualStamp`]) async throws -> [`ManualStamp`]
+    func `echoOptionalStamps`(_ argument0: [`ManualStamp`?]?) async throws -> [`ManualStamp`?]?
     func `getInterfaceVersion`() async throws -> Int32
     func `getInterfaceHash`() async throws -> String
 }
@@ -72,6 +74,8 @@ public enum IEchoTransactionCode {
     public static let `echoNested`: UInt32 = 26
     public static let `echoStamp`: UInt32 = 27
     public static let `echoOptionalStamp`: UInt32 = 28
+    public static let `echoStamps`: UInt32 = 29
+    public static let `echoOptionalStamps`: UInt32 = 30
     public static let `getInterfaceVersion`: UInt32 = 16777215
     public static let `getInterfaceHash`: UInt32 = 16777214
 }
@@ -387,6 +391,27 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         return try IEchoManualParcelableCodec.read(`ManualStamp`.self, from: &reader)
     }
 
+    public func `echoStamps`(_ argument0: [`ManualStamp`]) async throws -> [`ManualStamp`] {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { try IEchoManualParcelableCodec.write($0, to: &$1) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoStamps`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: { try IEchoManualParcelableCodec.readRequired(`ManualStamp`.self, from: &$0) }) else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
+    public func `echoOptionalStamps`(_ argument0: [`ManualStamp`?]?) async throws -> [`ManualStamp`?]? {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { try IEchoManualParcelableCodec.write($0, to: &$1) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoOptionalStamps`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: { try IEchoManualParcelableCodec.read(`ManualStamp`.self, from: &$0) })
+    }
+
     public func `getInterfaceVersion`() async throws -> Int32 {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
@@ -524,6 +549,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoOptionalStamp`(_ argument0: `ManualStamp`?) async throws -> `ManualStamp`? {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoOptionalStamp`)
+    }
+
+    open func `echoStamps`(_ argument0: [`ManualStamp`]) async throws -> [`ManualStamp`] {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoStamps`)
+    }
+
+    open func `echoOptionalStamps`(_ argument0: [`ManualStamp`?]?) async throws -> [`ManualStamp`?]? {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoOptionalStamps`)
     }
 
     open func `getInterfaceVersion`() async throws -> Int32 {
@@ -761,6 +794,22 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`echoOptionalStamp`(argument0)
             reply.writeNoException()
             try IEchoManualParcelableCodec.write(result, to: &reply)
+            return true
+        case IEchoTransactionCode.`echoStamps`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: { try IEchoManualParcelableCodec.readRequired(`ManualStamp`.self, from: &$0) }) else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoStamps`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { try IEchoManualParcelableCodec.write($0, to: &$1) }
+            return true
+        case IEchoTransactionCode.`echoOptionalStamps`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: { try IEchoManualParcelableCodec.read(`ManualStamp`.self, from: &$0) })
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoOptionalStamps`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { try IEchoManualParcelableCodec.write($0, to: &$1) }
             return true
         case IEchoTransactionCode.`getInterfaceVersion`:
             try data.enforceInterface(Self.descriptor)
