@@ -53,6 +53,8 @@ AIDL enums generate `RawRepresentable` Swift structs with named static values.
 Their `byte`, `int`, or `long` backing determines the wire encoding, and unknown
 raw values can round-trip through generated methods. Generate imported enums
 separately alongside their interfaces.
+Enum arrays use the backing type's array encoding, including packed bytes
+for byte-backed enums. Nullable enum arrays preserve a null array.
 
 AIDL unions with scalar, string, or byte-array fields generate Swift enums with
 associated values. String and byte-array variants can be nullable.
