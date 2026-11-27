@@ -29,6 +29,7 @@ each interface. It supports scalar input parameters and return values
 (`byte`, `int`, `long`, `boolean`, `char`, `float`, and `double`), `void`
 methods, and one-way calls. Interface methods also support `String` and
 `@nullable String` inputs and results using Binder's UTF-16 string encoding.
+`byte[]` and `@nullable byte[]` map to `[UInt8]` and `[UInt8]?`.
 The generator emits `BinderParcelable` structs for
 structured parcelables with scalar fields and implicit defaults. For a method
 that takes or returns a parcelable, generate the interface and the parcelable
