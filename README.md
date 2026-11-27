@@ -161,7 +161,8 @@ swift run --package-path Examples/FrameworkClient FrameworkClient /dev/binder
 Use the device node for the Android framework Binder context. The example
 looks up `wifi` and `bluetooth_manager` and prints the raw states returned by
 `getWifiEnabledState` and `getState`. Run against an Android image whose
-interface definitions match the fetched AOSP sources.
+interface definitions match the fetched AOSP sources. Use a shared AOSP tag
+or a per-project revision file when the image was built from pinned sources.
 
 ## AOSP parser corpus
 
@@ -177,6 +178,16 @@ The script refreshes sparse checkouts from AOSP `main` and prints each project's
 commit. The corpus lives under the ignored `.build/aosp-aidl` directory. It
 includes framework, Wi-Fi, and Bluetooth sources, exported Connectivity and
 modules-utils dependencies, and the public SDK's preprocessed `framework.aidl`.
+
+To fetch a branch or tag shared by all six AOSP repositories, pass
+`--ref <branch-or-tag>`. To record and replay exact project commits, use:
+
+```sh
+./Scripts/fetch-aosp-aidl.sh > aosp-revisions.txt
+./Scripts/fetch-aosp-aidl.sh --revisions aosp-revisions.txt
+```
+
+The revision file contains one repository path and full commit hash per line.
 
 Both tests run with `swift test` whenever the corpus directory exists. The
 parser test checks each file independently. The resolution test checks
