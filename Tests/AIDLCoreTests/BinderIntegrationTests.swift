@@ -293,6 +293,7 @@ private final class InvalidInoutReply: IBinder {
             Mode mode;
             @nullable boolean[] flags;
             @nullable List<String> labels;
+            Map<String, String> keyedLabels;
         }
         """.write(to: choice, atomically: true, encoding: .utf8)
     let containerChoice = package.appendingPathComponent("ContainerChoice.aidl")
@@ -331,6 +332,16 @@ private final class InvalidInoutReply: IBinder {
             ByteMode[] modes;
         }
         """.write(to: collectionFields, atomically: true, encoding: .utf8)
+    let mapFields = package.appendingPathComponent("MapFields.aidl")
+    try """
+        package demo;
+        import demo.Chunk;
+        parcelable MapFields {
+            Map<String, String> labels;
+            @nullable Map<String, Chunk> values;
+            int tail;
+        }
+        """.write(to: mapFields, atomically: true, encoding: .utf8)
     let enumFields = package.appendingPathComponent("EnumFields.aidl")
     try """
         package demo;
@@ -368,6 +379,7 @@ private final class InvalidInoutReply: IBinder {
         (unionEnvelope, "GeneratedUnionEnvelope.swift"),
         (byteMode, "GeneratedByteMode.swift"),
         (collectionFields, "GeneratedCollectionFields.swift"),
+        (mapFields, "GeneratedMapFields.swift"),
         (enumFields, "GeneratedEnumFields.swift"),
         (nested, "GeneratedNested.swift"),
     ] {
@@ -457,6 +469,11 @@ private final class InvalidInoutReply: IBinder {
         return
     }
     #expect(labels == ["A😀", nil, ""])
+    guard case let .keyedLabels(keyedLabels) = try await proxy.echoChoice(.keyedLabels(["a": "😀"])) else {
+        Issue.record("Expected the map union variant")
+        return
+    }
+    #expect(keyedLabels == ["a": "😀"])
     #expect(try await proxy.echoInts([Int32.min, 0, Int32.max]) == [Int32.min, 0, Int32.max])
     #expect(try await proxy.echoInts([]).isEmpty)
     #expect(try await proxy.echoLongs([.min, .max]) == [Int64.min, Int64.max])
@@ -598,7 +615,7 @@ public struct ManualStamp: BinderParcelable, Equatable {
     #expect(parcel.bytes == [1, 0, 0, 0, 1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0])
 
     var invalid = Parcel()
-    invalid.append(Int32(7))
+    invalid.append(Int32(8))
     var reader = invalid.reader()
     #expect(throws: BinderError.failedTransaction) {
         try Choice(from: &reader)
@@ -619,6 +636,27 @@ public struct ManualStamp: BinderParcelable, Equatable {
     var flags = Parcel()
     try Choice.flags([true, false]).write(to: &flags)
     #expect(flags.bytes == [5, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+}
+
+@Test func generatedMapFieldsKeepTypedValuesWithinTheFrame() throws {
+    var parcel = Parcel()
+    try MapFields(labels: ["x": "A😀"], values: ["z": Chunk(id: 7)], tail: 9).write(to: &parcel)
+    #expect(parcel.count == 68)
+    var header = parcel.reader()
+    #expect(try header.readInt32() == 68)
+    parcel.append(Int32(42))
+
+    var reader = parcel.reader()
+    let fields = try MapFields(from: &reader)
+    #expect(fields.labels == ["x": "A😀"])
+    #expect(fields.values?["z"]?.id == 7 && fields.tail == 9)
+    #expect(try reader.readInt32() == 42)
+
+    var older = Parcel()
+    older.append(Int32(4))
+    var oldReader = older.reader()
+    let defaults = try MapFields(from: &oldReader)
+    #expect(defaults.labels.isEmpty && defaults.values == nil)
 }
 
 @Test func generatedParcelableArrayFieldsRespectFrameBounds() throws {
