@@ -32,6 +32,9 @@ It supports scalar input parameters and return values
 (`byte`, `int`, `long`, `boolean`, `char`, `float`, and `double`), `void`
 methods, and one-way calls. Interface methods also support `String` and
 `@nullable String` inputs and results using Binder's UTF-16 string encoding.
+The generator preserves method order with Java source annotations such as
+`@JavaPassthrough` and `@UnsupportedAppUsage`. Strings marked `@utf8InCpp`
+still use UTF-16 on the wire.
 `byte[]` and `@nullable byte[]` map to `[UInt8]` and `[UInt8]?`.
 Interface methods support arrays of all primitive types listed above,
 including nullable arrays.
@@ -40,10 +43,15 @@ arrays as `inout` parameters.
 Their lengths stay fixed for the call, and the caller receives updates after
 the reply has been decoded.
 Non-nullable `inout List<String>` and typed-object lists can also change length.
+Two-way methods can declare these lists as `out`. The Swift stub receives
+empty lists, and the proxy replaces the caller's lists from the reply.
 `String[]` and `List<String>` map to `[String]`. Their `@nullable` forms
 map to `[String?]?` and preserve null elements.
 Arrays and lists of generated parcelables and unions use Binder typed-object
 encoding. Their nullable forms also preserve null collections and elements.
+`Map<String, String>` and string-keyed maps of generated parcelables or
+unions map to Swift dictionaries in methods, parcelable fields, and union variants.
+The `@nullable` form allows a null map. Keys and values must be non-null.
 The generator emits `BinderParcelable` structs for
 structured parcelables with scalar, string, and primitive-array fields. It supports
 explicit defaults for integer and string expressions without named references,
@@ -88,6 +96,13 @@ corresponding metadata transactions. Supply the version and hash for the
 interface snapshot you compiled. The generated stub returns those values,
 and the proxy queries the remote interface at the reserved transaction codes.
 
+Use `--client-method <name>` to generate a client for selected methods of a
+larger interface. Repeat the option for multiple methods. Generation still
+analyzes the full AIDL definition and preserves each selected method's
+original transaction code. The output includes the selected protocol and
+proxy. For example, select `getWifiEnabledState` from AOSP's `IWifiManager`
+using its normal include roots.
+
 Generated proxies accept the `RemoteProxy` returned by Binder service lookup.
 For example, if a service implements the generated `IEcho` interface:
 
@@ -121,11 +136,40 @@ Paths are relative to the target's source directory. Use `preprocessedPaths`
 for optional SDK declaration files. List each declaration you want emitted
 under `sources`. The optional `interfaceMetadata` object uses those same paths
 to configure Stable AIDL version or hash transactions per interface.
+The optional `clientMethods` object maps source paths to arrays of method names.
 Use distinct filenames. Add `aidl-config.json` and `AIDL`
 to the target's `exclude` list so SwiftPM leaves them to the plugin. The plugin
 generates and compiles the Swift bindings during the build.
 
 Callback generation remains pending.
+
+## Android framework smoke client
+
+Fetch the AOSP corpus and build the client with SwiftPM:
+
+```sh
+./Scripts/fetch-aosp-aidl.sh
+swift build --package-path Examples/FrameworkClient
+```
+
+On a host with access to the Android framework Binder device, run:
+
+```sh
+swift run --package-path Examples/FrameworkClient FrameworkClient /dev/binder
+```
+
+Use the device node for the Android framework Binder context. The example
+looks up `wifi` and `bluetooth_manager` and prints the raw states returned by
+`getWifiEnabledState` and `getState`. Run against an Android image whose
+interface definitions match the fetched AOSP sources. Use a shared AOSP tag
+or a per-project revision file when the image was built from pinned sources.
+
+With an AOSP `aidl` executable available, compare the smoke client's generated
+transaction IDs with that compiler for the same corpus:
+
+```sh
+AOSP_AIDL=/absolute/path/to/aidl swift test --filter comparesAOSPClientTransactions
+```
 
 ## AOSP parser corpus
 
@@ -141,6 +185,16 @@ The script refreshes sparse checkouts from AOSP `main` and prints each project's
 commit. The corpus lives under the ignored `.build/aosp-aidl` directory. It
 includes framework, Wi-Fi, and Bluetooth sources, exported Connectivity and
 modules-utils dependencies, and the public SDK's preprocessed `framework.aidl`.
+
+To fetch a branch or tag shared by all six AOSP repositories, pass
+`--ref <branch-or-tag>`. To record and replay exact project commits, use:
+
+```sh
+./Scripts/fetch-aosp-aidl.sh > aosp-revisions.txt
+./Scripts/fetch-aosp-aidl.sh --revisions aosp-revisions.txt
+```
+
+The revision file contains one repository path and full commit hash per line.
 
 Both tests run with `swift test` whenever the corpus directory exists. The
 parser test checks each file independently. The resolution test checks

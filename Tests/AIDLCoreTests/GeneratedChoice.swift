@@ -9,6 +9,7 @@ public enum `Choice`: BinderParcelable {
     case `mode`(`Mode`)
     case `flags`([Bool]?)
     case `labels`([String?]?)
+    case `keyedLabels`([String: String])
 
     public init() {
         self = .`number`(0)
@@ -31,6 +32,9 @@ public enum `Choice`: BinderParcelable {
             self = try .`flags`(ChoiceArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readBool() }))
         case 6:
             self = try .`labels`(ChoiceArrayCodec.read(from: &reader, elementSize: 4, readElement: { try $0.readString() }))
+        case 7:
+            guard let value = try ChoiceMapCodec.read(from: &reader, readValue: ChoiceMapCodec.readRequiredString) else { throw ParcelError.invalidLength(-1) }
+            self = .`keyedLabels`(value)
         default:
             throw BinderError.failedTransaction
         }
@@ -59,6 +63,9 @@ public enum `Choice`: BinderParcelable {
         case let .`labels`(value):
             parcel.append(Int32(6))
             try ChoiceArrayCodec.write(value, to: &parcel) { if let value = $0 { $1.append(value) } else { $1.appendNullString() } }
+        case let .`keyedLabels`(value):
+            parcel.append(Int32(7))
+            try ChoiceMapCodec.write(value, to: &parcel) { $1.append($0) }
         }
     }
 
@@ -101,5 +108,44 @@ private enum ChoiceArrayCodec {
         guard let count = Int32(exactly: values.count) else { throw BinderError.failedTransaction }
         parcel.append(count)
         for value in values { try writeElement(value, &parcel) }
+    }
+}
+
+private enum ChoiceMapCodec {
+    static func read<Value>(
+        from reader: inout Parcel.Reader, readValue: (inout Parcel.Reader) throws -> Value
+    ) throws -> [String: Value]? {
+        let count = try reader.readInt32()
+        if count == -1 { return nil }
+        guard count >= 0 else { throw ParcelError.invalidLength(count) }
+        guard Int(count) <= reader.remaining / 8 else { throw ParcelError.endOfParcel }
+        var values: [String: Value] = [:]
+        for _ in 0..<count {
+            let key = try readRequiredString(from: &reader)
+            let value = try readValue(&reader)
+            guard values.updateValue(value, forKey: key) == nil else { throw BinderError.failedTransaction }
+        }
+        return values
+    }
+
+    static func readRequiredString(from reader: inout Parcel.Reader) throws -> String {
+        guard let value = try reader.readString() else { throw ParcelError.invalidLength(-1) }
+        return value
+    }
+
+    static func write<Value>(
+        _ values: [String: Value]?, to parcel: inout Parcel,
+        writeValue: (Value, inout Parcel) throws -> Void
+    ) throws {
+        guard let values else {
+            parcel.append(Int32(-1))
+            return
+        }
+        guard let count = Int32(exactly: values.count) else { throw BinderError.failedTransaction }
+        parcel.append(count)
+        for (key, value) in values.sorted(by: { $0.key < $1.key }) {
+            parcel.append(key)
+            try writeValue(value, &parcel)
+        }
     }
 }

@@ -3,6 +3,141 @@ import Binder
 import Foundation
 import Testing
 
+@Test func generatedJavaAnnotationsPreserveTransactionOrderAndStringEncoding() async throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try """
+        package demo;
+        @JavaPassthrough(annotation="@Deprecated")
+        interface IAnnotated {
+            @UnsupportedAppUsage
+            int legacy();
+            @JavaPassthrough(annotation="@Deprecated")
+            @nullable @utf8InCpp String label(in @nullable @utf8InCpp String input);
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedAnnotated.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+    #expect(IAnnotatedTransactionCode.legacy == 1)
+    #expect(IAnnotatedTransactionCode.label == 2)
+
+    let stub = AnnotatedService()
+    let proxy = IAnnotatedProxy(remote: stub)
+    #expect(try await proxy.legacy() == 7)
+    #expect(try await proxy.label("A😀") == "A😀")
+    #expect(try await proxy.label(nil) == nil)
+    var request = Parcel()
+    request.appendInterfaceToken(IAnnotatedProxy.descriptor)
+    request.append("A😀")
+    let reply = try await stub.transact(code: IAnnotatedTransactionCode.label, data: request, flags: [])
+    #expect(reply.bytes == [0, 0, 0, 0, 3, 0, 0, 0, 65, 0, 61, 216, 0, 222, 0, 0])
+}
+
+private final class AnnotatedService: IAnnotatedStub, @unchecked Sendable {
+    override func legacy() async throws -> Int32 { 7 }
+
+    override func label(_ input: String?) async throws -> String? { input }
+}
+
+@Test func generatedStringMapsUseCountAndStringPairs() async throws {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".aidl")
+    try """
+        package demo;
+        interface IStringMap {
+            Map<String, String> echo(in Map<String, String> values);
+            @nullable Map<String, String> echoOptional(in @nullable Map<String, String> values);
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: path) }
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedStringMap.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path) == String(contentsOf: fixture, encoding: .utf8))
+
+    let stub = StringMapService()
+    let proxy = IStringMapProxy(remote: stub)
+    #expect(try await proxy.echo(["z": "A😀", "a": ""]) == ["a": "", "z": "A😀"])
+    #expect(try await proxy.echoOptional([:]) == [:])
+    #expect(try await proxy.echoOptional(nil) == nil)
+
+    var request = Parcel()
+    request.appendInterfaceToken(IStringMapProxy.descriptor)
+    request.append(Int32(2))
+    request.append("z")
+    request.append("A😀")
+    request.append("a")
+    request.append("")
+    let reply = try await stub.transact(code: IStringMapTransactionCode.echo, data: request, flags: [])
+    var reader = reply.reader()
+    try reader.readException()
+    #expect(try reader.readInt32() == 2)
+    #expect(try reader.readString() == "a")
+    #expect(try reader.readString() == "")
+    #expect(try reader.readString() == "z")
+    #expect(try reader.readString() == "A😀")
+    #expect(reader.isAtEnd)
+
+    var malformed = Parcel()
+    malformed.appendInterfaceToken(IStringMapProxy.descriptor)
+    malformed.append(Int32(1))
+    malformed.append("key")
+    malformed.appendNullString()
+    await #expect(throws: ParcelError.invalidLength(-1)) {
+        try await stub.transact(code: IStringMapTransactionCode.echo, data: malformed, flags: [])
+    }
+}
+
+private final class StringMapService: IStringMapStub, @unchecked Sendable {
+    override func echo(_ values: [String: String]) async throws -> [String: String] { values }
+
+    override func echoOptional(_ values: [String: String]?) async throws -> [String: String]? { values }
+}
+
+@Test func generatedTypedMapsUseParcelablePresenceMarkers() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let package = root.appendingPathComponent("demo", isDirectory: true)
+    try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let path = package.appendingPathComponent("ITypedMap.aidl")
+    try """
+        package demo;
+        import demo.Chunk;
+        interface ITypedMap {
+            Map<String, Chunk> echo(in Map<String, Chunk> values);
+            @nullable Map<String, Chunk> echoOptional(in @nullable Map<String, Chunk> values);
+        }
+        """.write(to: path, atomically: true, encoding: .utf8)
+    try "package demo; parcelable Chunk { int id; long count; boolean complete; }"
+        .write(to: package.appendingPathComponent("Chunk.aidl"), atomically: true, encoding: .utf8)
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("GeneratedTypedMap.swift")
+    #expect(try AIDLCompiler().compile(sourcePath: path.path, includePaths: [root.path]) == String(contentsOf: fixture, encoding: .utf8))
+
+    let stub = TypedMapService()
+    let proxy = ITypedMapProxy(remote: stub)
+    let chunks = try await proxy.echo(["x": Chunk(id: 7, count: .min, complete: true)])
+    #expect(chunks["x"]?.id == 7)
+    #expect(chunks["x"]?.count == Int64.min)
+    #expect(chunks["x"]?.complete == true)
+    #expect(try await proxy.echoOptional([:])?.isEmpty == true)
+    #expect(try await proxy.echoOptional(nil) == nil)
+
+    var request = Parcel()
+    request.appendInterfaceToken(ITypedMapProxy.descriptor)
+    request.append(Int32(1))
+    request.append("x")
+    request.append(Int32(0))
+    await #expect(throws: BinderError.failedTransaction) {
+        try await stub.transact(code: ITypedMapTransactionCode.echo, data: request, flags: [])
+    }
+}
+
+private final class TypedMapService: ITypedMapStub, @unchecked Sendable {
+    override func echo(_ values: [String: Chunk]) async throws -> [String: Chunk] { values }
+
+    override func echoOptional(_ values: [String: Chunk]?) async throws -> [String: Chunk]? { values }
+}
+
 @Test func generatedInoutArraysUpdateOnlyAfterValidReply() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     let package = root.appendingPathComponent("demo", isDirectory: true)
@@ -17,6 +152,7 @@ import Testing
             int update(inout int[] values, inout byte[] bytes);
             void updateObjects(inout String[] labels, inout Chunk[] chunks, inout Mode[] modes);
             void updateLists(inout List<String> labels, inout List<Chunk> chunks);
+            int fillLists(out List<String> labels, out List<Chunk> chunks);
         }
         """.write(to: path, atomically: true, encoding: .utf8)
     try "package demo; parcelable Chunk { int id; long count; boolean complete; }"
@@ -45,6 +181,9 @@ import Testing
     try await proxy.updateLists(&labels, &chunks)
     #expect(labels == ["", "A😀", "new"])
     #expect(chunks.map(\.id) == [1])
+    #expect(try await proxy.fillLists(&labels, &chunks) == 7)
+    #expect(labels == ["out"])
+    #expect(chunks.map(\.id) == [42, 43])
 
     let malformed = IInoutProxy(remote: InvalidInoutReply())
     await #expect(throws: BinderError.failedTransaction) {
@@ -85,6 +224,13 @@ private final class InoutService: IInoutStub, @unchecked Sendable {
     override func updateLists(_ labels: inout [String], _ chunks: inout [Chunk]) async throws {
         labels.append("new")
         if !chunks.isEmpty { chunks.removeFirst() }
+    }
+
+    override func fillLists(_ labels: inout [String], _ chunks: inout [Chunk]) async throws -> Int32 {
+        guard labels.isEmpty, chunks.isEmpty else { throw BinderError.failedTransaction }
+        labels.append("out")
+        chunks = [Chunk(id: 42), Chunk(id: 43)]
+        return 7
     }
 }
 
@@ -184,6 +330,7 @@ private final class InvalidInoutReply: IBinder {
             Mode mode;
             @nullable boolean[] flags;
             @nullable List<String> labels;
+            Map<String, String> keyedLabels;
         }
         """.write(to: choice, atomically: true, encoding: .utf8)
     let containerChoice = package.appendingPathComponent("ContainerChoice.aidl")
@@ -222,6 +369,16 @@ private final class InvalidInoutReply: IBinder {
             ByteMode[] modes;
         }
         """.write(to: collectionFields, atomically: true, encoding: .utf8)
+    let mapFields = package.appendingPathComponent("MapFields.aidl")
+    try """
+        package demo;
+        import demo.Chunk;
+        parcelable MapFields {
+            Map<String, String> labels;
+            @nullable Map<String, Chunk> values;
+            int tail;
+        }
+        """.write(to: mapFields, atomically: true, encoding: .utf8)
     let enumFields = package.appendingPathComponent("EnumFields.aidl")
     try """
         package demo;
@@ -259,6 +416,7 @@ private final class InvalidInoutReply: IBinder {
         (unionEnvelope, "GeneratedUnionEnvelope.swift"),
         (byteMode, "GeneratedByteMode.swift"),
         (collectionFields, "GeneratedCollectionFields.swift"),
+        (mapFields, "GeneratedMapFields.swift"),
         (enumFields, "GeneratedEnumFields.swift"),
         (nested, "GeneratedNested.swift"),
     ] {
@@ -348,6 +506,11 @@ private final class InvalidInoutReply: IBinder {
         return
     }
     #expect(labels == ["A😀", nil, ""])
+    guard case let .keyedLabels(keyedLabels) = try await proxy.echoChoice(.keyedLabels(["a": "😀"])) else {
+        Issue.record("Expected the map union variant")
+        return
+    }
+    #expect(keyedLabels == ["a": "😀"])
     #expect(try await proxy.echoInts([Int32.min, 0, Int32.max]) == [Int32.min, 0, Int32.max])
     #expect(try await proxy.echoInts([]).isEmpty)
     #expect(try await proxy.echoLongs([.min, .max]) == [Int64.min, Int64.max])
@@ -489,7 +652,7 @@ public struct ManualStamp: BinderParcelable, Equatable {
     #expect(parcel.bytes == [1, 0, 0, 0, 1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0])
 
     var invalid = Parcel()
-    invalid.append(Int32(7))
+    invalid.append(Int32(8))
     var reader = invalid.reader()
     #expect(throws: BinderError.failedTransaction) {
         try Choice(from: &reader)
@@ -510,6 +673,27 @@ public struct ManualStamp: BinderParcelable, Equatable {
     var flags = Parcel()
     try Choice.flags([true, false]).write(to: &flags)
     #expect(flags.bytes == [5, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+}
+
+@Test func generatedMapFieldsKeepTypedValuesWithinTheFrame() throws {
+    var parcel = Parcel()
+    try MapFields(labels: ["x": "A😀"], values: ["z": Chunk(id: 7)], tail: 9).write(to: &parcel)
+    #expect(parcel.count == 68)
+    var header = parcel.reader()
+    #expect(try header.readInt32() == 68)
+    parcel.append(Int32(42))
+
+    var reader = parcel.reader()
+    let fields = try MapFields(from: &reader)
+    #expect(fields.labels == ["x": "A😀"])
+    #expect(fields.values?["z"]?.id == 7 && fields.tail == 9)
+    #expect(try reader.readInt32() == 42)
+
+    var older = Parcel()
+    older.append(Int32(4))
+    var oldReader = older.reader()
+    let defaults = try MapFields(from: &oldReader)
+    #expect(defaults.labels.isEmpty && defaults.values == nil)
 }
 
 @Test func generatedParcelableArrayFieldsRespectFrameBounds() throws {

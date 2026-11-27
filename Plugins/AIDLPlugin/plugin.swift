@@ -9,6 +9,7 @@ struct AIDLPlugin: BuildToolPlugin {
         let preprocessedPaths: [String]?
         let interfaceMetadata: [String: InterfaceMetadata]?
         let manualParcelables: [String]?
+        let clientMethods: [String: [String]]?
     }
 
     private struct InterfaceMetadata: Decodable {
@@ -25,6 +26,10 @@ struct AIDLPlugin: BuildToolPlugin {
         let metadata = config.interfaceMetadata ?? [:]
         if let unknownSource = metadata.keys.sorted().first(where: { !config.sources.contains($0) }) {
             throw PluginError("Interface metadata names an unconfigured source: \(unknownSource)")
+        }
+        let clients = config.clientMethods ?? [:]
+        if let invalid = clients.keys.sorted().first(where: { !config.sources.contains($0) || clients[$0]?.isEmpty == true }) {
+            throw PluginError("Client method selection requires a configured source and at least one method: \(invalid)")
         }
         let sources = config.sources.map { resolve($0, relativeTo: directory) }
         let includes = (config.includePaths ?? []).map { resolve($0, relativeTo: directory) }
@@ -46,6 +51,7 @@ struct AIDLPlugin: BuildToolPlugin {
             arguments += includes.flatMap { ["-I", $0.path] }
             arguments += preprocessed.flatMap { ["-p", $0.path] }
             arguments += (config.manualParcelables ?? []).flatMap { ["--manual-parcelable", $0] }
+            arguments += (clients[path] ?? []).flatMap { ["--client-method", $0] }
             if let version = metadata[path]?.version { arguments += ["--interface-version", String(version)] }
             if let hash = metadata[path]?.hash { arguments.append("--interface-hash=\(hash)") }
             arguments.append(source.path)

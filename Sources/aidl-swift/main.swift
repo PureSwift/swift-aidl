@@ -35,6 +35,9 @@ extension AIDLSwift {
         @Option(name: .customLong("manual-parcelable"), help: "Use a hand-written BinderParcelable for this fully qualified AIDL type.")
         var manualParcelables: [String] = []
 
+        @Option(name: .customLong("client-method"), help: "Emit client bindings only for this method. Repeat to select more methods.")
+        var clientMethods: [String] = []
+
         @Argument(help: "The root AIDL source file.")
         var sourcePath: String
 
@@ -42,7 +45,7 @@ extension AIDLSwift {
             let source = try AIDLCompiler().compile(
                 sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths,
                 interfaceVersion: interfaceVersion, interfaceHash: interfaceHash,
-                manualParcelables: Set(manualParcelables)
+                manualParcelables: Set(manualParcelables), clientMethods: Set(clientMethods)
             )
             if let output {
                 try source.write(toFile: output, atomically: true, encoding: .utf8)

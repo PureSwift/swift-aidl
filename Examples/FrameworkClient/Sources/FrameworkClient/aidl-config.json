@@ -1,0 +1,21 @@
+{
+  "sources": [
+    "../../../../.build/aosp-aidl/packages/modules/Wifi/framework/java/android/net/wifi/IWifiManager.aidl",
+    "../../../../.build/aosp-aidl/packages/modules/Bluetooth/service/aidl/android/bluetooth/IBluetoothManager.aidl"
+  ],
+  "includePaths": [
+    "../../../../.build/aosp-aidl/frameworks/base/core/java",
+    "../../../../.build/aosp-aidl/frameworks/libs/modules-utils/java",
+    "../../../../.build/aosp-aidl/packages/modules/Wifi/framework/java",
+    "../../../../.build/aosp-aidl/packages/modules/Wifi/framework/aidl-export",
+    "../../../../.build/aosp-aidl/packages/modules/Bluetooth/service/aidl",
+    "../../../../.build/aosp-aidl/packages/modules/Bluetooth/android/app/aidl",
+    "../../../../.build/aosp-aidl/packages/modules/Bluetooth/framework/aidl-export",
+    "../../../../.build/aosp-aidl/packages/modules/Connectivity/framework/aidl-export"
+  ],
+  "preprocessedPaths": ["../../../../.build/aosp-aidl/prebuilts/sdk/current/public/framework.aidl"],
+  "clientMethods": {
+    "../../../../.build/aosp-aidl/packages/modules/Wifi/framework/java/android/net/wifi/IWifiManager.aidl": ["getWifiEnabledState"],
+    "../../../../.build/aosp-aidl/packages/modules/Bluetooth/service/aidl/android/bluetooth/IBluetoothManager.aidl": ["getState"]
+  }
+}
