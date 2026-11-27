@@ -42,6 +42,22 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         self.remote = remote
     }
 
+    public init(remote: RemoteProxy) {
+        self.init(remote: RemoteEndpoint(proxy: remote))
+    }
+
+    private final class RemoteEndpoint: IBinder {
+        let proxy: RemoteProxy
+
+        init(proxy: RemoteProxy) {
+            self.proxy = proxy
+        }
+
+        func transact(code: UInt32, data: Parcel, flags: TransactionFlags) async throws -> Parcel {
+            try await proxy.transact(code: code, request: data, flags: flags)
+        }
+    }
+
     public func `echo`(_ argument0: Int32) async throws -> Int32 {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
