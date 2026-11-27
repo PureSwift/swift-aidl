@@ -13,6 +13,7 @@ import Testing
             double scale(float factor, double value);
             boolean matches(byte value, char marker);
             Chunk roundTrip(in Chunk sample);
+            @nullable Chunk roundTripOptional(in @nullable Chunk sample);
             String echoText(String value);
             @nullable String echoOptionalText(in @nullable String value);
             byte[] echoBytes(in byte[] value);
@@ -61,6 +62,11 @@ import Testing
     #expect(result.id == 2)
     #expect(result.count == Int64.min)
     #expect(result.complete)
+    #expect(try await proxy.roundTripOptional(nil) == nil)
+    let optionalResult = try await proxy.roundTripOptional(Chunk(id: 10, count: 20, complete: true))
+    #expect(optionalResult?.id == 10)
+    #expect(optionalResult?.count == 20)
+    #expect(optionalResult?.complete == true)
 
     #expect(try await proxy.echoText("A😀") == "A😀")
     #expect(try await proxy.echoOptionalText("") == "")
@@ -102,6 +108,17 @@ private final class NullStringEndpoint: IBinder {
 }
 
 @Test func generatedParcelableRespectsFrameBounds() throws {
+    var null = Parcel()
+    null.append(Int32(0))
+    null.append(Int32(42))
+    var nullReader = null.reader()
+    #expect(try Chunk.readNullableTypedObject(from: &nullReader) == nil)
+    #expect(try nullReader.readInt32() == 42)
+    var requiredReader = null.reader()
+    #expect(throws: BinderError.failedTransaction) {
+        try Chunk.readTypedObject(from: &requiredReader)
+    }
+
     var parcel = Parcel()
     try Chunk(id: 7, count: 10, complete: true).writeTypedObject(to: &parcel)
     #expect(parcel.bytes == [
@@ -171,6 +188,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func roundTrip(_ sample: Chunk) async throws -> Chunk {
         Chunk(id: sample.id + 1, count: sample.count, complete: sample.complete)
     }
+
+    override func roundTripOptional(_ sample: Chunk?) async throws -> Chunk? { sample }
 
     override func echoText(_ value: String) async throws -> String { value }
 
