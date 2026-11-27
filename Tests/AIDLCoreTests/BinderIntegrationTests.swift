@@ -78,6 +78,7 @@ import Testing
             @nullable byte[] data;
             Mode mode;
             @nullable boolean[] flags;
+            @nullable List<String> labels;
         }
         """.write(to: choice, atomically: true, encoding: .utf8)
     let containerChoice = package.appendingPathComponent("ContainerChoice.aidl")
@@ -105,6 +106,17 @@ import Testing
         package demo;
         enum ByteMode { NONE, HIGH = -7 }
         """.write(to: byteMode, atomically: true, encoding: .utf8)
+    let collectionFields = package.appendingPathComponent("CollectionFields.aidl")
+    try """
+        package demo;
+        import demo.Chunk;
+        import demo.ByteMode;
+        parcelable CollectionFields {
+            List<String> labels;
+            @nullable List<Chunk> chunks;
+            ByteMode[] modes;
+        }
+        """.write(to: collectionFields, atomically: true, encoding: .utf8)
     let enumFields = package.appendingPathComponent("EnumFields.aidl")
     try """
         package demo;
@@ -141,6 +153,7 @@ import Testing
         (containerChoice, "GeneratedContainerChoice.swift"),
         (unionEnvelope, "GeneratedUnionEnvelope.swift"),
         (byteMode, "GeneratedByteMode.swift"),
+        (collectionFields, "GeneratedCollectionFields.swift"),
         (enumFields, "GeneratedEnumFields.swift"),
         (nested, "GeneratedNested.swift"),
     ] {
@@ -213,6 +226,11 @@ import Testing
     #expect(text == "A😀")
     #expect(bytes == [128, 255])
     #expect(absent == nil)
+    guard case let .labels(labels) = try await proxy.echoChoice(.labels(["A😀", nil, ""])) else {
+        Issue.record("Expected the list union variant")
+        return
+    }
+    #expect(labels == ["A😀", nil, ""])
     #expect(try await proxy.echoInts([Int32.min, 0, Int32.max]) == [Int32.min, 0, Int32.max])
     #expect(try await proxy.echoInts([]).isEmpty)
     #expect(try await proxy.echoLongs([.min, .max]) == [Int64.min, Int64.max])
@@ -318,7 +336,7 @@ import Testing
     #expect(parcel.bytes == [1, 0, 0, 0, 1, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0])
 
     var invalid = Parcel()
-    invalid.append(Int32(6))
+    invalid.append(Int32(7))
     var reader = invalid.reader()
     #expect(throws: BinderError.failedTransaction) {
         try Choice(from: &reader)
@@ -379,6 +397,31 @@ import Testing
     var malformedReader = malformed.reader()
     #expect(throws: ParcelError.endOfParcel) { try ArrayFields(from: &malformedReader) }
     #expect(try malformedReader.readInt32() == 99)
+}
+
+@Test func generatedCollectionFieldsPreserveElementFraming() throws {
+    let unknownMode = ByteMode(rawValue: .min)
+    var parcel = Parcel()
+    try CollectionFields(
+        labels: ["", "A😀"], chunks: [nil, Chunk(id: 7)], modes: [.HIGH, unknownMode]
+    ).write(to: &parcel)
+    #expect(parcel.count == 68)
+    var header = parcel.reader()
+    #expect(try header.readInt32() == 68)
+    parcel.append(Int32(42))
+
+    var reader = parcel.reader()
+    let decoded = try CollectionFields(from: &reader)
+    #expect(decoded.labels == ["", "A😀"])
+    #expect(decoded.chunks?.map { $0?.id } == [nil, 7])
+    #expect(decoded.modes == [.HIGH, unknownMode])
+    #expect(try reader.readInt32() == 42)
+
+    var older = Parcel()
+    older.append(Int32(4))
+    var oldReader = older.reader()
+    let defaults = try CollectionFields(from: &oldReader)
+    #expect(defaults.labels.isEmpty && defaults.chunks == nil && defaults.modes.isEmpty)
 }
 
 @Test func generatedNestedUnionsPreserveTagsAndPresenceMarkers() throws {
