@@ -49,10 +49,10 @@ separately, passing the import root with `-I`. Use `@nullable` on a parcelable
 input or result to generate an optional Swift value. Compile both outputs in a target
 that depends on `Binder` 0.2.1.
 
-Structured parcelables can contain other generated parcelables. Nullable
-children default to `nil` and required children default to an initialized
-value. Generate each referenced parcelable separately. Recursive parcelable
-fields are unsupported.
+Structured parcelables and unions can contain generated parcelables and unions.
+Nullable parcelable fields default to `nil` and required fields default to an
+initialized value. A union's initializer selects its first variant. Generate
+each referenced type separately. Recursive typed-object fields are unsupported.
 
 AIDL enums generate `RawRepresentable` Swift structs with named static values.
 Their `byte`, `int`, or `long` backing determines the wire encoding, and unknown
@@ -64,7 +64,7 @@ Parcelable enum fields and union enum variants use the scalar backing encoding.
 Parcelable fields can default to a named enum member and otherwise start at
 raw value zero.
 
-AIDL unions with scalar, string, or byte-array fields generate Swift enums with
+AIDL unions generate Swift enums with
 associated values. String and byte-array variants can be nullable.
 The wire tag follows declaration order and only the active value is encoded.
 Generate imported unions separately alongside their interfaces.
