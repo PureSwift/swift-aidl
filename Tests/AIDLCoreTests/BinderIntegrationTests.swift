@@ -10,6 +10,8 @@ import Testing
         import demo.Choice;
         import demo.Mode;
         interface IEcho {
+            const String LABEL = "swift " + (WORD + "!");
+            const String WORD = "binder";
             const byte LOW = -7;
             const int MASK = (1 << 31) | 5;
             const long WIDE = (1L << 40) | LOW & 0xff;
@@ -81,6 +83,8 @@ import Testing
     #expect(IEchoProxy.LOW == -7)
     #expect(IEchoProxy.MASK == -2_147_483_643)
     #expect(IEchoProxy.WIDE == 1_099_511_628_025)
+    #expect(IEchoProxy.LABEL == "swift binder!")
+    #expect(IEchoProxy.WORD == "binder")
     #expect(IEchoTransactionCode.echo == 1)
     #expect(IEchoTransactionCode.notify == 2)
     #expect(IEchoTransactionCode.scale == 3)
