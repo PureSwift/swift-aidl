@@ -8,6 +8,7 @@ struct AIDLPlugin: BuildToolPlugin {
         let includePaths: [String]?
         let preprocessedPaths: [String]?
         let interfaceMetadata: [String: InterfaceMetadata]?
+        let manualParcelables: [String]?
     }
 
     private struct InterfaceMetadata: Decodable {
@@ -44,6 +45,7 @@ struct AIDLPlugin: BuildToolPlugin {
             var arguments = ["generate", "-o", output.path]
             arguments += includes.flatMap { ["-I", $0.path] }
             arguments += preprocessed.flatMap { ["-p", $0.path] }
+            arguments += (config.manualParcelables ?? []).flatMap { ["--manual-parcelable", $0] }
             if let version = metadata[path]?.version { arguments += ["--interface-version", String(version)] }
             if let hash = metadata[path]?.hash { arguments.append("--interface-hash=\(hash)") }
             arguments.append(source.path)
