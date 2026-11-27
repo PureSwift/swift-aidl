@@ -6,7 +6,7 @@ import Testing
     "interface Example { int first(int value) = 7; void second(); }",
     "interface Example { void first() = 7; void second() = 7; }",
     "interface Example { void first() = 16777115; }",
-    "interface Example { int[] first(); }",
+    "interface Example { int[][] first(); }",
     "interface Example { void first(out int value); }",
     "oneway interface Example { int first(); }",
     "interface Example { @nullable int first(); }",
