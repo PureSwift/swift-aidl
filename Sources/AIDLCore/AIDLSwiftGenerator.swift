@@ -153,16 +153,19 @@ struct AIDLSwiftGenerator {
             "    }",
             "}",
         ]
-        if methods.contains(where: { method in
-            method.result?.usesArrayCodec == true || method.parameters.contains(where: \.usesArrayCodec)
-        }) {
-            lines += arrayCodec(named: name + "ArrayCodec")
+        let methodTypes = methods.flatMap { $0.parameters + ($0.result.map { [$0] } ?? []) }
+        if methodTypes.contains(where: \.usesArrayCodec) {
+            let requiresStringReader = methodTypes.contains {
+                if case .stringCollection(_, nullable: false) = $0 { return true }
+                return false
+            }
+            lines += arrayCodec(named: name + "ArrayCodec", requiresStringReader: requiresStringReader)
         }
         return lines
     }
 
-    private func arrayCodec(named name: String) -> [String] {
-        [
+    private func arrayCodec(named name: String, requiresStringReader: Bool) -> [String] {
+        var lines = [
             "",
             "private enum \(name) {",
             "    static func read<Element>(",
@@ -188,8 +191,17 @@ struct AIDLSwiftGenerator {
             "        parcel.append(count)",
             "        for value in values { writeElement(value, &parcel) }",
             "    }",
-            "}",
         ]
+        if requiresStringReader {
+            lines += [
+                "",
+                "    static func readRequiredString(from reader: inout Parcel.Reader) throws -> String {",
+                "        guard let value = try reader.readString() else { throw ParcelError.invalidLength(-1) }",
+                "        return value",
+                "    }",
+            ]
+        }
+        return lines + ["}"]
     }
 
     private func generateInterfaceConstants(_ interface: AIDLInterface, methodNames: Set<String>) throws -> [String] {
@@ -335,9 +347,19 @@ struct AIDLSwiftGenerator {
         if let reference = referenceType(type) {
             if annotations.isEmpty || nullable { return .reference(reference, nullable: nullable) }
         }
+        let codec = file.declarations[0].name + "ArrayCodec"
+        if annotations.isEmpty || nullable {
+            if type.name == "String", type.arrayDimensions == 1, type.typeArguments.isEmpty {
+                return .stringCollection(codec: codec, nullable: nullable)
+            }
+            if type.name == "List", type.arrayDimensions == 0, type.typeArguments.count == 1,
+               let element = type.typeArguments.first, element.name == "String", isPlain(element) {
+                return .stringCollection(codec: codec, nullable: nullable)
+            }
+        }
         if type.arrayDimensions == 1, type.typeArguments.isEmpty, annotations.isEmpty || nullable,
            let scalar = Scalar(rawValue: type.name), scalar != .byte {
-            return .scalarArray(scalar, codec: file.declarations[0].name + "ArrayCodec", nullable: nullable)
+            return .scalarArray(scalar, codec: codec, nullable: nullable)
         }
         if type.arrayDimensions == 0, type.typeArguments.isEmpty, annotations.isEmpty || nullable {
             if annotations.isEmpty, let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
@@ -658,6 +680,7 @@ struct AIDLSwiftGenerator {
         case scalar(Scalar)
         case reference(Reference, nullable: Bool)
         case scalarArray(Scalar, codec: String, nullable: Bool)
+        case stringCollection(codec: String, nullable: Bool)
         case parcelable(String, qualifiedName: String, nullable: Bool)
         case enumeration(String, qualifiedName: String, backing: Scalar)
 
@@ -671,14 +694,17 @@ struct AIDLSwiftGenerator {
 
         var requiresNonNullRead: Bool {
             switch self {
-            case .reference(_, nullable: false), .scalarArray(_, _, nullable: false): true
+            case .reference(_, nullable: false), .scalarArray(_, _, nullable: false),
+                 .stringCollection(_, nullable: false): true
             default: false
             }
         }
 
         var usesArrayCodec: Bool {
-            if case .scalarArray = self { return true }
-            return false
+            switch self {
+            case .scalarArray, .stringCollection: true
+            default: false
+            }
         }
 
         var swiftType: String {
@@ -686,6 +712,7 @@ struct AIDLSwiftGenerator {
             case let .scalar(type): type.swiftType
             case let .reference(type, nullable): type.swiftType + (nullable ? "?" : "")
             case let .scalarArray(type, _, nullable): "[\(type.swiftType)]" + (nullable ? "?" : "")
+            case let .stringCollection(_, nullable): nullable ? "[String?]?" : "[String]"
             case let .parcelable(name, _, nullable): escaped(name) + (nullable ? "?" : "")
             case let .enumeration(name, _, _): escaped(name)
             }
@@ -697,6 +724,8 @@ struct AIDLSwiftGenerator {
             case let .reference(type, _): "\(reader).\(type.readMethod)()"
             case let .scalarArray(type, codec, _):
                 "\(codec).read(from: &\(reader), elementSize: \(type.wireSize), readElement: { try \(type.read(from: "$0")) })"
+            case let .stringCollection(codec, nullable):
+                "\(codec).read(from: &\(reader), elementSize: 4, readElement: \(nullable ? "{ try $0.readString() }" : codec + ".readRequiredString"))"
             case let .parcelable(name, _, nullable):
                 "\(escaped(name)).\(nullable ? "readNullableTypedObject" : "readTypedObject")(from: &\(reader))"
             case let .enumeration(name, _, backing):
@@ -720,6 +749,10 @@ struct AIDLSwiftGenerator {
                 "if let value = \(value) { \(parcel).\(type.append("value")) } else { \(parcel).\(type.appendNullMethod)() }"
             case let .scalarArray(type, codec, _):
                 "try \(codec).write(\(value), to: &\(parcel)) { $1.\(type.append("$0")) }"
+            case let .stringCollection(codec, nullable: false):
+                "try \(codec).write(\(value), to: &\(parcel)) { $1.append($0) }"
+            case let .stringCollection(codec, nullable: true):
+                "try \(codec).write(\(value), to: &\(parcel)) { if let value = $0 { $1.append(value) } else { $1.appendNullString() } }"
             case .parcelable(_, _, nullable: false): "try \(value).writeTypedObject(to: &\(parcel))"
             case .parcelable(_, _, nullable: true):
                 "if let value = \(value) { try value.writeTypedObject(to: &\(parcel)) } else { \(parcel).append(Int32(0)) }"
