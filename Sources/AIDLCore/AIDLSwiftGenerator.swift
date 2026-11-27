@@ -373,24 +373,34 @@ struct AIDLSwiftGenerator {
         annotations.count == 1 && annotations[0].name == "nullable" && annotations[0].arguments.isEmpty
     }
 
-    private func parcelableFields(_ parcelable: AIDLParcelable) throws -> [(name: String, type: Scalar)] {
+    private func parcelableFields(_ parcelable: AIDLParcelable) throws -> [(name: String, field: ParcelableField)] {
         let name = parcelable.name
         guard !parcelable.isOpaqueForwardDecl, parcelable.annotations.isEmpty,
               parcelable.typeParameters.isEmpty, parcelable.constants.isEmpty,
               parcelable.nestedDeclarations.isEmpty else {
             throw failure("Swift generation requires a plain structured parcelable for '\(name)'")
         }
-        return try scalarFields(parcelable.fields, in: name)
+        return try fields(parcelable.fields, in: name) { type, context in
+            if let reference = referenceType(type) {
+                let nullable = isNullableAnnotation(type.annotations)
+                if nullable || type.annotations.isEmpty {
+                    return .reference(reference, nullable: nullable)
+                }
+            }
+            return .scalar(try scalar(type, context: context))
+        }
     }
 
-    private func unionFields(_ union: AIDLUnion) throws -> [(name: String, type: Scalar)] {
+    private func unionFields(_ union: AIDLUnion) throws -> [(name: String, field: Scalar)] {
         guard union.annotations.isEmpty, union.constants.isEmpty, union.nestedDeclarations.isEmpty, !union.fields.isEmpty else {
             throw failure("Swift generation requires a plain union with at least one field for '\(union.name)'")
         }
-        return try scalarFields(union.fields, in: union.name)
+        return try fields(union.fields, in: union.name, transform: scalar)
     }
 
-    private func scalarFields(_ fields: [AIDLField], in name: String) throws -> [(name: String, type: Scalar)] {
+    private func fields<T>(
+        _ fields: [AIDLField], in name: String, transform: (AIDLType, String) throws -> T
+    ) throws -> [(name: String, field: T)] {
         var fieldNames = Set<String>()
         return try fields.map { field in
             let context = "field '\(name).\(field.name)'"
@@ -402,7 +412,7 @@ struct AIDLSwiftGenerator {
             guard field.defaultValue == nil else {
                 throw failure("Swift generation does not support an explicit default for \(context)")
             }
-            return (escaped(field.name), try scalar(field.type, context: context))
+            return (escaped(field.name), try transform(field.type, context))
         }
     }
 
@@ -410,7 +420,7 @@ struct AIDLSwiftGenerator {
         let name = escaped(try identifier(union.name))
         let fields = try unionFields(union)
         var lines = ["public enum \(name): BinderParcelable {"]
-        lines += fields.map { "    case \($0.name)(\($0.type.swiftType))" }
+        lines += fields.map { "    case \($0.name)(\($0.field.swiftType))" }
         lines += [
             "",
             "    public init(from reader: inout Parcel.Reader) throws {",
@@ -419,7 +429,7 @@ struct AIDLSwiftGenerator {
         for (tag, field) in fields.enumerated() {
             lines += [
                 "        case \(tag):",
-                "            self = try .\(field.name)(\(field.type.read(from: "reader")))",
+                "            self = try .\(field.name)(\(field.field.read(from: "reader")))",
             ]
         }
         lines += [
@@ -435,7 +445,7 @@ struct AIDLSwiftGenerator {
             lines += [
                 "        case let .\(field.name)(value):",
                 "            parcel.append(Int32(\(tag)))",
-                "            parcel.\(field.type.append("value"))",
+                "            parcel.\(field.field.append("value"))",
             ]
         }
         lines += ["        }", "    }"]
@@ -445,13 +455,13 @@ struct AIDLSwiftGenerator {
     private func generateParcelable(_ parcelable: AIDLParcelable) throws -> [String] {
         let name = escaped(try identifier(parcelable.name))
         let fields = try parcelableFields(parcelable)
-        let size = fields.reduce(4) { $0 + $1.type.wireSize }
+        let size = fields.reduce(4) { $0 + $1.field.fixedWireSize }
         guard let wireSize = Int32(exactly: size) else {
             throw failure("parcelable '\(parcelable.name)' exceeds the size of a Binder parcel")
         }
         var lines = ["public struct \(name): BinderParcelable {"]
-        lines += fields.map { "    public var \($0.name): \($0.type.swiftType)" }
-        let parameters = fields.map { "\($0.name): \($0.type.swiftType) = \($0.type.zero)" }.joined(separator: ", ")
+        lines += fields.map { "    public var \($0.name): \($0.field.wireType.swiftType)" }
+        let parameters = fields.map { "\($0.name): \($0.field.wireType.swiftType) = \($0.field.initialValue)" }.joined(separator: ", ")
         lines += ["", "    public init(\(parameters)) {"]
         lines += fields.map { "        self.\($0.name) = \($0.name)" }
         lines += [
@@ -465,15 +475,39 @@ struct AIDLSwiftGenerator {
             lines.append("        _ = try reader.read(count: Int(size) - 4)")
         } else {
             lines.append("        var fields = Parcel(bytes: Array(try reader.read(count: Int(size) - 4))).reader()")
-            lines += fields.map { "        self.\($0.name) = fields.isAtEnd ? \($0.type.zero) : try \($0.type.read(from: "fields"))" }
+            for (name, field) in fields {
+                let type = field.wireType
+                if type.requiresNonNullRead {
+                    lines += [
+                        "        if fields.isAtEnd {",
+                        "            self.\(name) = \(field.initialValue)",
+                        "        } else {",
+                        "            \(type.decode(from: "fields", binding: "value"))",
+                        "            self.\(name) = value",
+                        "        }",
+                    ]
+                } else {
+                    lines.append("        self.\(name) = fields.isAtEnd ? \(field.initialValue) : try \(type.read(from: "fields"))")
+                }
+            }
         }
         lines += [
             "    }",
             "",
             "    public func write(to parcel: inout Parcel) throws {",
-            "        parcel.append(Int32(\(wireSize)))",
         ]
-        lines += fields.map { "        parcel.\($0.type.append("self." + $0.name))" }
+        let payloadSizes = fields.compactMap { $0.field.variablePayloadSize(of: "self." + $0.name) }
+        if payloadSizes.isEmpty {
+            lines.append("        parcel.append(Int32(\(wireSize)))")
+        } else {
+            lines.append("        var size: Int64 = \(wireSize)")
+            lines += payloadSizes.map { "        size += \($0)" }
+            lines += [
+                "        guard let wireSize = Int32(exactly: size) else { throw BinderError.failedTransaction }",
+                "        parcel.append(wireSize)",
+            ]
+        }
+        lines += fields.map { "        \($0.field.wireType.write("self." + $0.name, to: "parcel"))" }
         lines.append("    }")
         return lines + Self.typedObjectMethods + ["}"]
     }
@@ -613,6 +647,44 @@ struct AIDLSwiftGenerator {
 
         func append(_ value: String) -> String {
             self == .string ? "append(\(value))" : "append(bytes: \(value))"
+        }
+    }
+
+    private enum ParcelableField {
+        case scalar(Scalar)
+        case reference(Reference, nullable: Bool)
+
+        var wireType: WireType {
+            switch self {
+            case let .scalar(type): .scalar(type)
+            case let .reference(type, nullable): .reference(type, nullable: nullable)
+            }
+        }
+
+        var initialValue: String {
+            switch self {
+            case let .scalar(type): type.zero
+            case .reference(_, nullable: true): "nil"
+            case .reference(.string, nullable: false): "\"\""
+            case .reference(.bytes, nullable: false): "[]"
+            }
+        }
+
+        // Reference fields always write a count, including for null values.
+        var fixedWireSize: Int {
+            switch self {
+            case let .scalar(type): type.wireSize
+            case .reference: 4
+            }
+        }
+
+        func variablePayloadSize(of value: String) -> String? {
+            guard case let .reference(type, nullable) = self else { return nil }
+            let member = type == .string ? "utf16.count" : "count"
+            let count = nullable ? "value.\(member)" : "\(value).\(member)"
+            let payload = type == .string ? "(Int64(\(count)) + 1) * 2" : "Int64(\(count))"
+            let paddedSize = "((\(payload) + 3) & ~3)"
+            return nullable ? "\(value).map { value in \(paddedSize) } ?? 0" : paddedSize
         }
     }
 
