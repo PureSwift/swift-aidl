@@ -29,13 +29,13 @@ public struct AIDLCompiler: Sendable {
         return graph
     }
 
-    /// Emits Swift bindings for the root interface using Binder's client and stub APIs.
+    /// Emits Swift bindings for the root interface or structured parcelable.
     public func compile(
         sourcePath: String,
         includePaths: [String] = [],
         preprocessedPaths: [String] = []
     ) throws -> String {
         let graph = try analyze(sourcePath: sourcePath, includePaths: includePaths, preprocessedPaths: preprocessedPaths)
-        return try AIDLSwiftGenerator(file: graph.files[0]).generate()
+        return try AIDLSwiftGenerator(file: graph.files[0], resolver: AIDLTypeResolver(graph: graph)).generate()
     }
 }

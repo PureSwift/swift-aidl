@@ -14,7 +14,7 @@ struct AIDLSwift: ParsableCommand {
 extension AIDLSwift {
     struct Generate: ParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Generate Swift Binder bindings for a scalar AIDL interface."
+            abstract: "Generate Swift Binder bindings for an AIDL interface or structured parcelable."
         )
 
         @Option(name: .customShort("I"), help: "Search this directory for imports, in the order specified.")

@@ -6,6 +6,7 @@ public protocol `IEcho`: BinderInterface {
     func `notify`(_ argument0: Int64) async throws
     func `scale`(_ argument0: Float, _ argument1: Double) async throws -> Double
     func `matches`(_ argument0: Int8, _ argument1: UInt16) async throws -> Bool
+    func `roundTrip`(_ argument0: `Chunk`) async throws -> `Chunk`
 }
 
 public extension `IEcho` {
@@ -17,6 +18,7 @@ public enum IEchoTransactionCode {
     public static let `notify`: UInt32 = 2
     public static let `scale`: UInt32 = 3
     public static let `matches`: UInt32 = 4
+    public static let `roundTrip`: UInt32 = 5
 }
 
 public struct IEchoProxy: `IEcho`, BinderProxy {
@@ -64,6 +66,16 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         try reader.readException()
         return try reader.readBool()
     }
+
+    public func `roundTrip`(_ argument0: `Chunk`) async throws -> `Chunk` {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try argument0.writeTypedObject(to: &request)
+        let reply = try await remote.transact(code: IEchoTransactionCode.`roundTrip`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try `Chunk`.readTypedObject(from: &reader)
+    }
 }
 
 open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
@@ -87,6 +99,10 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `matches`(_ argument0: Int8, _ argument1: UInt16) async throws -> Bool {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`matches`)
+    }
+
+    open func `roundTrip`(_ argument0: `Chunk`) async throws -> `Chunk` {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`roundTrip`)
     }
 
     public override func onTransact(
@@ -124,6 +140,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`matches`(argument0, argument1)
             reply.writeNoException()
             reply.append(result)
+            return true
+        case IEchoTransactionCode.`roundTrip`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try `Chunk`.readTypedObject(from: &data)
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`roundTrip`(argument0)
+            reply.writeNoException()
+            try result.writeTypedObject(to: &reply)
             return true
         default:
             return try await super.onTransact(code: code, data: &data, reply: &reply, flags: flags)

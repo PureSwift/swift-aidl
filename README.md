@@ -25,12 +25,15 @@ swift run aidl-swift generate -o IEcho.swift IEcho.aidl
 ```
 
 The generator emits a Swift protocol, proxy, stub, and transaction codes for
-one interface. It supports scalar input parameters and return values
+each interface. It supports scalar input parameters and return values
 (`byte`, `int`, `long`, `boolean`, `char`, `float`, and `double`), `void`
-methods, and one-way calls. Compile the output in a target that depends on
-`Binder` 0.2.1.
+methods, and one-way calls. It also emits `BinderParcelable` structs for
+structured parcelables with scalar fields and implicit defaults. For a method
+that takes or returns a parcelable, generate the interface and the parcelable
+separately, passing the import root with `-I`. Compile both outputs in a target
+that depends on `Binder` 0.2.1.
 
-Parcelables, callbacks, and SwiftPM plugin integration are pending.
+Callbacks and SwiftPM plugin integration are pending.
 
 ## AOSP parser corpus
 
