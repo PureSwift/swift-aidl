@@ -47,7 +47,7 @@ struct AIDLSwiftGenerator {
         var parcelableNames: [String: String] = [:]
         for method in methods {
             let types = method.parameters + (method.result.map { [$0] } ?? [])
-            for case let .parcelable(name, qualifiedName) in types {
+            for case let .parcelable(name, qualifiedName, _) in types {
                 if let existing = parcelableNames.updateValue(qualifiedName, forKey: name), existing != qualifiedName {
                     throw failure("parcelables '\(existing)' and '\(qualifiedName)' share the Swift name '\(name)'")
                 }
@@ -176,8 +176,7 @@ struct AIDLSwiftGenerator {
         _ = try identifier(method.name)
         // The parser preserves annotations before the return type on the method.
         let returnAnnotations = method.annotations + method.returnType.annotations
-        guard method.annotations.isEmpty ||
-              (referenceType(method.returnType) != nil && isNullableAnnotation(returnAnnotations)) else {
+        guard method.annotations.isEmpty || isNullableAnnotation(returnAnnotations) else {
             throw failure("Swift generation does not support annotations on \(context)")
         }
         // AOSP reserves the top 100 method IDs for compiler metadata.
@@ -186,7 +185,7 @@ struct AIDLSwiftGenerator {
         }
 
         let result: WireType?
-        if method.returnType.name == "void", isPlain(method.returnType) {
+        if method.returnType.name == "void", isPlain(method.returnType), method.annotations.isEmpty {
             result = nil
         } else {
             result = try wireType(method.returnType, leadingAnnotations: method.annotations, context: context)
@@ -205,13 +204,13 @@ struct AIDLSwiftGenerator {
     }
 
     private func wireType(_ type: AIDLType, leadingAnnotations: [AIDLAnnotation] = [], context: String) throws -> WireType {
+        let annotations = leadingAnnotations + type.annotations
+        let nullable = isNullableAnnotation(annotations)
         if let reference = referenceType(type) {
-            let annotations = leadingAnnotations + type.annotations
-            if annotations.isEmpty { return .reference(reference, nullable: false) }
-            if isNullableAnnotation(annotations) { return .reference(reference, nullable: true) }
+            if annotations.isEmpty || nullable { return .reference(reference, nullable: nullable) }
         }
-        if isPlain(type) {
-            if let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
+        if type.arrayDimensions == 0, type.typeArguments.isEmpty, annotations.isEmpty || nullable {
+            if annotations.isEmpty, let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
             let resolved = try resolver.resolve(type, in: file, scope: [file.declarations[0].name])
             if case let .declaration(name) = resolved.target,
                let declaration = resolver.symbols[name]?.declaration,
@@ -222,7 +221,7 @@ struct AIDLSwiftGenerator {
                 guard ![owner, owner + "Proxy", owner + "Stub", owner + "TransactionCode"].contains(swiftName) else {
                     throw failure("Swift name collision for parcelable '\(name)' in \(context)")
                 }
-                return .parcelable(swiftName, qualifiedName: name)
+                return .parcelable(swiftName, qualifiedName: name, nullable: nullable)
             }
         }
         throw failure("unsupported Swift wire type '\(type.name)' in \(context)")
@@ -253,7 +252,7 @@ struct AIDLSwiftGenerator {
             let context = "field '\(name).\(field.name)'"
             _ = try identifier(field.name)
             guard fieldNames.insert(field.name).inserted,
-                  !["write", "readTypedObject", "writeTypedObject"].contains(field.name) else {
+                  !["write", "readTypedObject", "readNullableTypedObject", "writeTypedObject"].contains(field.name) else {
                 throw failure("conflicting Swift name for \(context)")
             }
             guard field.defaultValue == nil else {
@@ -299,7 +298,12 @@ struct AIDLSwiftGenerator {
             "    }",
             "",
             "    public static func readTypedObject(from reader: inout Parcel.Reader) throws -> Self {",
-            "        guard try reader.readInt32() != 0 else { throw BinderError.failedTransaction }",
+            "        guard let value = try readNullableTypedObject(from: &reader) else { throw BinderError.failedTransaction }",
+            "        return value",
+            "    }",
+            "",
+            "    public static func readNullableTypedObject(from reader: inout Parcel.Reader) throws -> Self? {",
+            "        guard try reader.readInt32() != 0 else { return nil }",
             "        return try Self(from: &reader)",
             "    }",
             "",
@@ -360,7 +364,7 @@ struct AIDLSwiftGenerator {
     private enum WireType {
         case scalar(Scalar)
         case reference(Reference, nullable: Bool)
-        case parcelable(String, qualifiedName: String)
+        case parcelable(String, qualifiedName: String, nullable: Bool)
 
         var requiresNonNullRead: Bool {
             if case .reference(_, nullable: false) = self { return true }
@@ -371,7 +375,7 @@ struct AIDLSwiftGenerator {
             switch self {
             case let .scalar(type): type.swiftType
             case let .reference(type, nullable): type.swiftType + (nullable ? "?" : "")
-            case let .parcelable(name, _): escaped(name)
+            case let .parcelable(name, _, nullable): escaped(name) + (nullable ? "?" : "")
             }
         }
 
@@ -379,7 +383,8 @@ struct AIDLSwiftGenerator {
             switch self {
             case let .scalar(type): type.read(from: reader)
             case let .reference(type, _): "\(reader).\(type.readMethod)()"
-            case let .parcelable(name, _): "\(escaped(name)).readTypedObject(from: &\(reader))"
+            case let .parcelable(name, _, nullable):
+                "\(escaped(name)).\(nullable ? "readNullableTypedObject" : "readTypedObject")(from: &\(reader))"
             }
         }
 
@@ -397,7 +402,9 @@ struct AIDLSwiftGenerator {
             case let .reference(type, nullable: false): "\(parcel).\(type.append(value))"
             case let .reference(type, nullable: true):
                 "if let value = \(value) { \(parcel).\(type.append("value")) } else { \(parcel).\(type.appendNullMethod)() }"
-            case .parcelable: "try \(value).writeTypedObject(to: &\(parcel))"
+            case .parcelable(_, _, nullable: false): "try \(value).writeTypedObject(to: &\(parcel))"
+            case .parcelable(_, _, nullable: true):
+                "if let value = \(value) { try value.writeTypedObject(to: &\(parcel)) } else { \(parcel).append(Int32(0)) }"
             }
         }
     }
