@@ -9,6 +9,7 @@ import Testing
     "interface Example { int[][] first(); }",
     "interface Example { void first(out int value); }",
     "oneway interface Example { void first(inout int[] values); }",
+    "interface Example { void first(inout @nullable String[] values); }",
     "oneway interface Example { int first(); }",
     "interface Example { @nullable int first(); }",
     "interface Example { @nullable void first(); }",
