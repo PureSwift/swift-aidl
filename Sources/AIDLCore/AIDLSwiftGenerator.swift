@@ -301,7 +301,9 @@ struct AIDLSwiftGenerator {
                 }
                 for index in method.inoutParameters {
                     lines.append("        \(method.parameters[index].decode(from: "reader", binding: "updated\(index)"))")
-                    lines.append("        guard updated\(index).count == argument\(index).count else { throw BinderError.failedTransaction }")
+                    if method.fixedLengthParameters.contains(index) {
+                        lines.append("        guard updated\(index).count == argument\(index).count else { throw BinderError.failedTransaction }")
+                    }
                 }
                 for index in method.inoutParameters {
                     lines.append("        argument\(index) = updated\(index)")
@@ -328,7 +330,9 @@ struct AIDLSwiftGenerator {
         for (index, type) in method.parameters.enumerated() {
             let mutable = method.inoutParameters.contains(index)
             lines.append("            \(type.decode(from: "data", binding: "argument\(index)", mutable: mutable))")
-            if mutable { lines.append("            let count\(index) = argument\(index).count") }
+            if method.fixedLengthParameters.contains(index) {
+                lines.append("            let count\(index) = argument\(index).count")
+            }
         }
         lines.append("            guard data.isAtEnd else { throw BinderError.failedTransaction }")
         let arguments = method.parameters.indices.map { index in
@@ -337,7 +341,7 @@ struct AIDLSwiftGenerator {
         let call = "try await self.\(escaped(method.name))(\(arguments))"
         lines.append("            " + (method.result == nil ? call : "let result = " + call))
         if !method.isOneway {
-            for index in method.inoutParameters {
+            for index in method.inoutParameters where method.fixedLengthParameters.contains(index) {
                 lines.append("            guard argument\(index).count == count\(index) else { throw BinderError.failedTransaction }")
             }
             lines.append("            reply.writeNoException()")
@@ -376,20 +380,25 @@ struct AIDLSwiftGenerator {
             throw failure("oneway \(context) must return void")
         }
         var inoutParameters: [Int] = []
+        var fixedLengthParameters: Set<Int> = []
         let parameters = try method.parameters.enumerated().map { index, parameter in
             if parameter.direction != .in {
+                let isArray = parameter.type.arrayDimensions == 1 && parameter.type.typeArguments.isEmpty
+                let isList = parameter.type.name == "List" && parameter.type.arrayDimensions == 0
                 guard parameter.direction == .inoutDirection, !isOneway,
-                      parameter.type.arrayDimensions == 1, parameter.type.typeArguments.isEmpty,
+                      isArray || isList,
                       parameter.type.annotations.isEmpty else {
                     throw failure("unsupported parameter direction for '\(parameter.name)' in \(context)")
                 }
                 inoutParameters.append(index)
+                if isArray { fixedLengthParameters.insert(index) }
             }
             return try wireType(parameter.type, context: context)
         }
         return Method(
             name: method.name, code: method.computedTransactionCode, parameters: parameters,
-            result: result, isOneway: isOneway, stubValue: nil, inoutParameters: inoutParameters
+            result: result, isOneway: isOneway, stubValue: nil, inoutParameters: inoutParameters,
+            fixedLengthParameters: fixedLengthParameters
         )
     }
 
@@ -892,6 +901,7 @@ struct AIDLSwiftGenerator {
         let isOneway: Bool
         let stubValue: String?
         var inoutParameters: [Int] = []
+        var fixedLengthParameters: Set<Int> = []
 
         var signature: String {
             let inputs = parameters.enumerated().map { index, type in
