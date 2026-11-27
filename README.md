@@ -56,11 +56,12 @@ each referenced type separately. Recursive typed-object fields are unsupported.
 Parcelables and unions also support string collections, enum arrays, and typed-object
 collections as fields or variants, with the same encoding as interface methods.
 
-For an opaque parcelable used directly by an interface method, supply a Swift
+For an opaque parcelable used by an interface method, supply a Swift
 type with the same unqualified name that conforms to `BinderParcelable`.
 Register its fully qualified AIDL name with `--manual-parcelable` or the
 plugin's `manualParcelables` array. The binding writes the presence marker,
-and the manual type handles the payload layout.
+and the manual type handles the payload layout. Methods can use the registered
+type directly or in arrays and lists, including nullable collections and elements.
 
 AIDL enums generate `RawRepresentable` Swift structs with named static values.
 Their `byte`, `int`, or `long` backing determines the wire encoding, and unknown
