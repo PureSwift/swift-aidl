@@ -27,6 +27,8 @@ import Testing
             @nullable byte[] echoOptionalBytes(in @nullable byte[] value);
             Mode echoMode(Mode value);
             Choice echoChoice(in Choice value);
+            int[] echoInts(in int[] value);
+            @nullable long[] echoLongs(in @nullable long[] value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -139,6 +141,18 @@ import Testing
     #expect(text == "A😀")
     #expect(bytes == [128, 255])
     #expect(absent == nil)
+    #expect(try await proxy.echoInts([Int32.min, 0, Int32.max]) == [Int32.min, 0, Int32.max])
+    #expect(try await proxy.echoInts([]).isEmpty)
+    #expect(try await proxy.echoLongs([.min, .max]) == [Int64.min, Int64.max])
+    #expect(try await proxy.echoLongs(nil) == nil)
+
+    var truncated = Parcel()
+    truncated.appendInterfaceToken(IEchoProxy.descriptor)
+    truncated.append(Int32.max)
+    truncated.append(Int32(42))
+    await #expect(throws: ParcelError.endOfParcel) {
+        try await stub.transact(code: IEchoTransactionCode.echoInts, data: truncated, flags: [])
+    }
 
     var invalidRequest = Parcel()
     invalidRequest.appendInterfaceToken(IEchoProxy.descriptor)
@@ -153,6 +167,9 @@ import Testing
     }
     await #expect(throws: ParcelError.invalidLength(-1)) {
         try await invalidReplyProxy.echoBytes([255])
+    }
+    await #expect(throws: ParcelError.invalidLength(-1)) {
+        try await invalidReplyProxy.echoInts([42])
     }
 
     var byteRequest = Parcel()
@@ -383,4 +400,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoMode(_ value: Mode) async throws -> Mode { value }
 
     override func echoChoice(_ value: Choice) async throws -> Choice { value }
+
+    override func echoInts(_ value: [Int32]) async throws -> [Int32] { value }
+
+    override func echoLongs(_ value: [Int64]?) async throws -> [Int64]? { value }
 }
