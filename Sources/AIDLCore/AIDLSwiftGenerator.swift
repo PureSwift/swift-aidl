@@ -373,33 +373,69 @@ struct AIDLSwiftGenerator {
         annotations.count == 1 && annotations[0].name == "nullable" && annotations[0].arguments.isEmpty
     }
 
-    private func parcelableFields(_ parcelable: AIDLParcelable) throws -> [(name: String, field: ParcelableField)] {
+    private func parcelableFields(_ parcelable: AIDLParcelable) throws -> [(name: String, field: ParcelableField, initialValue: String)] {
         let name = parcelable.name
         guard !parcelable.isOpaqueForwardDecl, parcelable.annotations.isEmpty,
               parcelable.typeParameters.isEmpty, parcelable.constants.isEmpty,
               parcelable.nestedDeclarations.isEmpty else {
             throw failure("Swift generation requires a plain structured parcelable for '\(name)'")
         }
-        return try fields(parcelable.fields, in: name) { type, context in
-            if let reference = referenceType(type) {
-                let nullable = isNullableAnnotation(type.annotations)
-                if nullable || type.annotations.isEmpty {
-                    return .reference(reference, nullable: nullable)
-                }
+        let fields = try fields(parcelable.fields, in: name) { field, context in
+            let type = field.type
+            let nullable = isNullableAnnotation(type.annotations)
+            let wire: ParcelableField
+            if let reference = referenceType(type), nullable || type.annotations.isEmpty {
+                wire = .reference(reference, nullable: nullable)
+            } else {
+                wire = .scalar(try scalar(type, context: context))
             }
-            return .scalar(try scalar(type, context: context))
+            let initialValue = try field.defaultValue.map { tokens in
+                try parcelableDefault(tokens, for: wire, fieldName: field.name, context: context)
+            } ?? wire.initialValue
+            return (wire, initialValue)
         }
+        return fields.map { ($0.name, $0.field.0, $0.field.1) }
+    }
+
+    private func parcelableDefault(
+        _ tokens: [AIDLToken], for field: ParcelableField, fieldName: String, context: String
+    ) throws -> String {
+        switch field {
+        case let .scalar(type):
+            if type == .boolean, tokens.count == 1,
+               let literal = tokens.first?.text, literal == "true" || literal == "false" {
+                return literal
+            }
+            if let backing = AIDLIntegerBacking(rawValue: type.rawValue) {
+                let value = try AIDLConstantEvaluator().evaluateInteger(tokens) { _ in nil }.value
+                guard AIDLInteger.fits(value, width: backing.width) else {
+                    throw failure("default value \(value) does not fit in \(type.rawValue) for \(context)")
+                }
+                return String(value)
+            }
+        case .reference(.string, _):
+            var evaluator = StringConstantEvaluator(definitions: [fieldName: tokens], interfaceDescriptor: "")
+            return String(reflecting: try evaluator.evaluate(fieldName))
+        default:
+            break
+        }
+        throw failure("unsupported explicit default for \(context)")
     }
 
     private func unionFields(_ union: AIDLUnion) throws -> [(name: String, field: Scalar)] {
         guard union.annotations.isEmpty, union.constants.isEmpty, union.nestedDeclarations.isEmpty, !union.fields.isEmpty else {
             throw failure("Swift generation requires a plain union with at least one field for '\(union.name)'")
         }
-        return try fields(union.fields, in: union.name, transform: scalar)
+        return try fields(union.fields, in: union.name) { field, context in
+            guard field.defaultValue == nil else {
+                throw failure("Swift generation does not support an explicit default for \(context)")
+            }
+            return try scalar(field.type, context: context)
+        }
     }
 
     private func fields<T>(
-        _ fields: [AIDLField], in name: String, transform: (AIDLType, String) throws -> T
+        _ fields: [AIDLField], in name: String, transform: (AIDLField, String) throws -> T
     ) throws -> [(name: String, field: T)] {
         var fieldNames = Set<String>()
         return try fields.map { field in
@@ -409,10 +445,7 @@ struct AIDLSwiftGenerator {
                   !["write", "readTypedObject", "readNullableTypedObject", "writeTypedObject"].contains(field.name) else {
                 throw failure("conflicting Swift name for \(context)")
             }
-            guard field.defaultValue == nil else {
-                throw failure("Swift generation does not support an explicit default for \(context)")
-            }
-            return (escaped(field.name), try transform(field.type, context))
+            return (escaped(field.name), try transform(field, context))
         }
     }
 
@@ -461,7 +494,7 @@ struct AIDLSwiftGenerator {
         }
         var lines = ["public struct \(name): BinderParcelable {"]
         lines += fields.map { "    public var \($0.name): \($0.field.wireType.swiftType)" }
-        let parameters = fields.map { "\($0.name): \($0.field.wireType.swiftType) = \($0.field.initialValue)" }.joined(separator: ", ")
+        let parameters = fields.map { "\($0.name): \($0.field.wireType.swiftType) = \($0.initialValue)" }.joined(separator: ", ")
         lines += ["", "    public init(\(parameters)) {"]
         lines += fields.map { "        self.\($0.name) = \($0.name)" }
         lines += [
@@ -475,19 +508,19 @@ struct AIDLSwiftGenerator {
             lines.append("        _ = try reader.read(count: Int(size) - 4)")
         } else {
             lines.append("        var fields = Parcel(bytes: Array(try reader.read(count: Int(size) - 4))).reader()")
-            for (name, field) in fields {
+            for (name, field, initialValue) in fields {
                 let type = field.wireType
                 if type.requiresNonNullRead {
                     lines += [
                         "        if fields.isAtEnd {",
-                        "            self.\(name) = \(field.initialValue)",
+                        "            self.\(name) = \(initialValue)",
                         "        } else {",
                         "            \(type.decode(from: "fields", binding: "value"))",
                         "            self.\(name) = value",
                         "        }",
                     ]
                 } else {
-                    lines.append("        self.\(name) = fields.isAtEnd ? \(field.initialValue) : try \(type.read(from: "fields"))")
+                    lines.append("        self.\(name) = fields.isAtEnd ? \(initialValue) : try \(type.read(from: "fields"))")
                 }
             }
         }
