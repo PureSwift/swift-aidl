@@ -15,6 +15,8 @@ import Testing
             Chunk roundTrip(in Chunk sample);
             String echoText(String value);
             @nullable String echoOptionalText(in @nullable String value);
+            byte[] echoBytes(in byte[] value);
+            @nullable byte[] echoOptionalBytes(in @nullable byte[] value);
         }
         """
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -63,6 +65,9 @@ import Testing
     #expect(try await proxy.echoText("A😀") == "A😀")
     #expect(try await proxy.echoOptionalText("") == "")
     #expect(try await proxy.echoOptionalText(nil) == nil)
+    #expect(try await proxy.echoBytes([0, 128, 255]) == [0, 128, 255])
+    #expect(try await proxy.echoOptionalBytes([]) == [])
+    #expect(try await proxy.echoOptionalBytes(nil) == nil)
 
     var invalidRequest = Parcel()
     invalidRequest.appendInterfaceToken(IEchoProxy.descriptor)
@@ -74,6 +79,16 @@ import Testing
     let invalidReplyProxy = IEchoProxy(remote: NullStringEndpoint())
     await #expect(throws: ParcelError.invalidLength(-1)) {
         try await invalidReplyProxy.echoText("value")
+    }
+    await #expect(throws: ParcelError.invalidLength(-1)) {
+        try await invalidReplyProxy.echoBytes([255])
+    }
+
+    var byteRequest = Parcel()
+    byteRequest.appendInterfaceToken(IEchoProxy.descriptor)
+    byteRequest.appendNullBytes()
+    await #expect(throws: ParcelError.invalidLength(-1)) {
+        try await stub.transact(code: IEchoTransactionCode.echoBytes, data: byteRequest, flags: [])
     }
 }
 
@@ -160,4 +175,8 @@ private final class EchoService: IEchoStub, @unchecked Sendable {
     override func echoText(_ value: String) async throws -> String { value }
 
     override func echoOptionalText(_ value: String?) async throws -> String? { value }
+
+    override func echoBytes(_ value: [UInt8]) async throws -> [UInt8] { value }
+
+    override func echoOptionalBytes(_ value: [UInt8]?) async throws -> [UInt8]? { value }
 }
