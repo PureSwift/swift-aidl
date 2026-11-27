@@ -23,6 +23,24 @@ public indirect enum AIDLDeclaration: Equatable, Sendable {
     case parcelable(AIDLParcelable)
     case enumeration(AIDLEnum)
     case union(AIDLUnion)
+
+    var name: String {
+        switch self {
+        case let .interface(value): value.name
+        case let .parcelable(value): value.name
+        case let .enumeration(value): value.name
+        case let .union(value): value.name
+        }
+    }
+
+    var nestedDeclarations: [AIDLDeclaration] {
+        switch self {
+        case let .interface(value): value.nestedDeclarations
+        case let .parcelable(value): value.nestedDeclarations
+        case .enumeration: []
+        case let .union(value): value.nestedDeclarations
+        }
+    }
 }
 
 public struct AIDLInterface: Equatable, Sendable {
