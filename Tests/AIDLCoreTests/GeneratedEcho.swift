@@ -24,6 +24,8 @@ public protocol `IEcho`: BinderInterface {
     func `echoOptionalTexts`(_ argument0: [String?]?) async throws -> [String?]?
     func `echoChunks`(_ argument0: [`Chunk`]) async throws -> [`Chunk`]
     func `echoOptionalChunks`(_ argument0: [`Chunk`?]?) async throws -> [`Chunk`?]?
+    func `echoModes`(_ argument0: [`Mode`]?) async throws -> [`Mode`]?
+    func `echoByteModes`(_ argument0: [`ByteMode`]) async throws -> [`ByteMode`]
     func `getInterfaceVersion`() async throws -> Int32
     func `getInterfaceHash`() async throws -> String
 }
@@ -60,6 +62,8 @@ public enum IEchoTransactionCode {
     public static let `echoOptionalTexts`: UInt32 = 20
     public static let `echoChunks`: UInt32 = 21
     public static let `echoOptionalChunks`: UInt32 = 22
+    public static let `echoModes`: UInt32 = 23
+    public static let `echoByteModes`: UInt32 = 24
     public static let `getInterfaceVersion`: UInt32 = 16777215
     public static let `getInterfaceHash`: UInt32 = 16777214
 }
@@ -314,6 +318,27 @@ public struct IEchoProxy: `IEcho`, BinderProxy {
         return try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: `Chunk`.readNullableTypedObject)
     }
 
+    public func `echoModes`(_ argument0: [`Mode`]?) async throws -> [`Mode`]? {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        try IEchoArrayCodec.write(argument0, to: &request) { $1.append($0.rawValue) }
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoModes`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        return try IEchoArrayCodec.read(from: &reader, elementSize: 4, readElement: { try `Mode`(rawValue: $0.readInt32()) })
+    }
+
+    public func `echoByteModes`(_ argument0: [`ByteMode`]) async throws -> [`ByteMode`] {
+        var request = Parcel()
+        request.appendInterfaceToken(Self.descriptor)
+        request.append(bytes: argument0.map { UInt8(bitPattern: $0.rawValue) })
+        let reply = try await remote.transact(code: IEchoTransactionCode.`echoByteModes`, data: request, flags: [])
+        var reader = reply.reader()
+        try reader.readException()
+        guard let result = try reader.readBytes()?.map({ `ByteMode`(rawValue: Int8(bitPattern: $0)) }) else { throw ParcelError.invalidLength(-1) }
+        return result
+    }
+
     public func `getInterfaceVersion`() async throws -> Int32 {
         var request = Parcel()
         request.appendInterfaceToken(Self.descriptor)
@@ -427,6 +452,14 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
 
     open func `echoOptionalChunks`(_ argument0: [`Chunk`?]?) async throws -> [`Chunk`?]? {
         throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoOptionalChunks`)
+    }
+
+    open func `echoModes`(_ argument0: [`Mode`]?) async throws -> [`Mode`]? {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoModes`)
+    }
+
+    open func `echoByteModes`(_ argument0: [`ByteMode`]) async throws -> [`ByteMode`] {
+        throw BinderTransactionError.unknownTransaction(IEchoTransactionCode.`echoByteModes`)
     }
 
     open func `getInterfaceVersion`() async throws -> Int32 {
@@ -616,6 +649,22 @@ open class IEchoStub: BinderStub, `IEcho`, @unchecked Sendable {
             let result = try await self.`echoOptionalChunks`(argument0)
             reply.writeNoException()
             try IEchoArrayCodec.write(result, to: &reply) { if let value = $0 { try value.writeTypedObject(to: &$1) } else { $1.append(Int32(0)) } }
+            return true
+        case IEchoTransactionCode.`echoModes`:
+            try data.enforceInterface(Self.descriptor)
+            let argument0 = try IEchoArrayCodec.read(from: &data, elementSize: 4, readElement: { try `Mode`(rawValue: $0.readInt32()) })
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoModes`(argument0)
+            reply.writeNoException()
+            try IEchoArrayCodec.write(result, to: &reply) { $1.append($0.rawValue) }
+            return true
+        case IEchoTransactionCode.`echoByteModes`:
+            try data.enforceInterface(Self.descriptor)
+            guard let argument0 = try data.readBytes()?.map({ `ByteMode`(rawValue: Int8(bitPattern: $0)) }) else { throw ParcelError.invalidLength(-1) }
+            guard data.isAtEnd else { throw BinderError.failedTransaction }
+            let result = try await self.`echoByteModes`(argument0)
+            reply.writeNoException()
+            reply.append(bytes: result.map { UInt8(bitPattern: $0.rawValue) })
             return true
         case IEchoTransactionCode.`getInterfaceVersion`:
             try data.enforceInterface(Self.descriptor)
