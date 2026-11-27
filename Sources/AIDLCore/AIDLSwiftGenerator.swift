@@ -336,29 +336,11 @@ struct AIDLSwiftGenerator {
         if let reference = referenceType(type) {
             if annotations.isEmpty || nullable { return .reference(reference, nullable: nullable) }
         }
-        let codec = file.declarations[0].name + "ArrayCodec"
-        if annotations.isEmpty || nullable, let elementName = collectionElementName(type) {
-            if elementName == "String" {
-                return .stringCollection(codec: codec, nullable: nullable)
-            }
-            if let name = try? resolver.resolveName(elementName, in: file, scope: [file.declarations[0].name]),
-               let symbol = resolver.symbols[name] {
-                let declaration = symbol.declaration
-                if try validateTypedObject(symbol) {
-                    let swiftName = try swiftDeclarationName(declaration, qualifiedName: name, context: context)
-                    return .parcelableCollection(swiftName, qualifiedName: name, codec: codec, nullable: nullable)
-                }
-                if case let .enumeration(enumeration) = declaration, type.arrayDimensions == 1 {
-                    let swiftName = try swiftDeclarationName(declaration, qualifiedName: name, context: context)
-                    return .enumArray(
-                        swiftName, qualifiedName: name, backing: try enumBacking(enumeration), codec: codec, nullable: nullable
-                    )
-                }
-            }
-        }
-        if type.arrayDimensions == 1, type.typeArguments.isEmpty, annotations.isEmpty || nullable,
-           let scalar = Scalar(rawValue: type.name), scalar != .byte {
-            return .scalarArray(scalar, codec: codec, nullable: nullable)
+        if annotations.isEmpty || nullable,
+           let collection = try collectionWireType(
+               type, in: file, owner: file.declarations[0].name, nullable: nullable, context: context
+           ) {
+            return collection
         }
         if type.arrayDimensions == 0, type.typeArguments.isEmpty, annotations.isEmpty || nullable {
             if annotations.isEmpty, let scalar = Scalar(rawValue: type.name) { return .scalar(scalar) }
@@ -378,6 +360,40 @@ struct AIDLSwiftGenerator {
         throw failure("unsupported Swift wire type '\(type.name)' in \(context)")
     }
 
+    private func collectionWireType(
+        _ type: AIDLType, in file: AIDLFile, owner: String, nullable: Bool,
+        context: String, ancestors: Set<String>? = nil
+    ) throws -> WireType? {
+        guard let elementName = collectionElementName(type) else { return nil }
+        let codec = owner + "ArrayCodec"
+        if elementName == "String" {
+            return .stringCollection(codec: codec, nullable: nullable)
+        }
+        if type.arrayDimensions == 1, let scalar = Scalar(rawValue: elementName), scalar != .byte {
+            return .scalarArray(scalar, codec: codec, nullable: nullable)
+        }
+        guard let name = try? resolver.resolveName(elementName, in: file, scope: [owner]),
+              let symbol = resolver.symbols[name] else { return nil }
+
+        let backing: Scalar?
+        if case let .enumeration(enumeration) = symbol.declaration, type.arrayDimensions == 1 {
+            backing = try enumBacking(enumeration)
+        } else {
+            guard try validateTypedObject(symbol, ancestors: ancestors ?? []) else { return nil }
+            backing = nil
+        }
+
+        let swiftName = if ancestors == nil {
+            try swiftDeclarationName(symbol.declaration, qualifiedName: name, context: context)
+        } else {
+            try inlineDeclarationName(symbol, owner: owner, context: context)
+        }
+        if let backing {
+            return .enumArray(swiftName, qualifiedName: name, backing: backing, codec: codec, nullable: nullable)
+        }
+        return .parcelableCollection(swiftName, qualifiedName: name, codec: codec, nullable: nullable)
+    }
+
     private func collectionElementName(_ type: AIDLType) -> String? {
         if type.arrayDimensions == 1, type.typeArguments.isEmpty { return type.name }
         if type.name == "List", type.arrayDimensions == 0, type.typeArguments.count == 1,
@@ -394,12 +410,12 @@ struct AIDLSwiftGenerator {
         return name
     }
 
-    private func validateTypedObject(_ symbol: AIDLSymbol) throws -> Bool {
+    private func validateTypedObject(_ symbol: AIDLSymbol, ancestors: Set<String> = []) throws -> Bool {
         switch symbol.declaration {
         case let .parcelable(parcelable):
-            _ = try parcelableFields(parcelable, declaredIn: symbol.sourceFile)
+            _ = try parcelableFields(parcelable, declaredIn: symbol.sourceFile, ancestors: ancestors)
         case let .union(union):
-            _ = try unionFields(union, declaredIn: symbol.sourceFile)
+            _ = try unionFields(union, declaredIn: symbol.sourceFile, ancestors: ancestors)
         default:
             return false
         }
@@ -482,9 +498,11 @@ struct AIDLSwiftGenerator {
         if let reference = referenceType(type), nullable || type.annotations.isEmpty {
             return .reference(reference, nullable: nullable)
         }
-        if type.arrayDimensions == 1, type.typeArguments.isEmpty, nullable || type.annotations.isEmpty,
-           let scalar = Scalar(rawValue: type.name), scalar != .byte {
-            return .array(scalar, codec: owner + "ArrayCodec", nullable: nullable)
+        if nullable || type.annotations.isEmpty,
+           let collection = try collectionWireType(
+               type, in: file, owner: owner, nullable: nullable, context: context, ancestors: ancestors
+           ) {
+            return .collection(collection, nullable: nullable)
         }
         if type.arrayDimensions == 0, type.typeArguments.isEmpty, type.annotations.isEmpty || nullable,
            let qualifiedName = try? resolver.resolveName(type.name, in: file, scope: [owner]),
@@ -924,11 +942,11 @@ struct AIDLSwiftGenerator {
         case reference(Reference, nullable: Bool)
         case enumeration(String, qualifiedName: String, backing: Scalar)
         case parcelable(String, qualifiedName: String, nullable: Bool)
-        case array(Scalar, codec: String, nullable: Bool)
+        case collection(WireType, nullable: Bool)
 
         var requiresBufferedPayload: Bool {
             switch self {
-            case .parcelable, .array: true
+            case .parcelable, .collection: true
             default: false
             }
         }
@@ -941,7 +959,7 @@ struct AIDLSwiftGenerator {
                 .enumeration(name, qualifiedName: qualifiedName, backing: backing)
             case let .parcelable(name, qualifiedName, nullable):
                 .parcelable(name, qualifiedName: qualifiedName, nullable: nullable)
-            case let .array(type, codec, nullable): .scalarArray(type, codec: codec, nullable: nullable)
+            case let .collection(type, _): type
             }
         }
 
@@ -953,7 +971,7 @@ struct AIDLSwiftGenerator {
             case .reference(.bytes, nullable: false): "[]"
             case let .enumeration(name, _, _): "\(escaped(name))(rawValue: 0)"
             case let .parcelable(name, _, nullable): nullable ? "nil" : "\(escaped(name))()"
-            case let .array(_, _, nullable): nullable ? "nil" : "[]"
+            case let .collection(_, nullable): nullable ? "nil" : "[]"
             }
         }
 
@@ -963,7 +981,7 @@ struct AIDLSwiftGenerator {
             case let .scalar(type): type.wireSize
             case .reference: 4
             case let .enumeration(_, _, backing): backing.wireSize
-            case .parcelable, .array: 0
+            case .parcelable, .collection: 0
             }
         }
 
