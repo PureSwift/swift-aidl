@@ -143,6 +143,26 @@ generates and compiles the Swift bindings during the build.
 
 Callback generation remains pending.
 
+## Android framework smoke client
+
+Fetch the AOSP corpus and build the client with SwiftPM:
+
+```sh
+./Scripts/fetch-aosp-aidl.sh
+swift build --package-path Examples/FrameworkClient
+```
+
+On a host with access to the Android framework Binder device, run:
+
+```sh
+swift run --package-path Examples/FrameworkClient FrameworkClient /dev/binder
+```
+
+Use the device node for the Android framework Binder context. The example
+looks up `wifi` and `bluetooth_manager` and prints the raw states returned by
+`getWifiEnabledState` and `getState`. Run against an Android image whose
+interface definitions match the fetched AOSP sources.
+
 ## AOSP parser corpus
 
 Run these commands from the repository root:
