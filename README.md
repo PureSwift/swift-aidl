@@ -53,6 +53,8 @@ Structured parcelables and unions can contain generated parcelables and unions.
 Nullable parcelable fields default to `nil` and required fields default to an
 initialized value. A union's initializer selects its first variant. Generate
 each referenced type separately. Recursive typed-object fields are unsupported.
+Parcelables and unions also support string collections, enum arrays, and typed-object
+collections as fields or variants, with the same encoding as interface methods.
 
 AIDL enums generate `RawRepresentable` Swift structs with named static values.
 Their `byte`, `int`, or `long` backing determines the wire encoding, and unknown
